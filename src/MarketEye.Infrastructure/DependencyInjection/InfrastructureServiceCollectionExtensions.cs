@@ -7,6 +7,7 @@ using System.Net;
 using MarketEye.Infrastructure.Ingestion;
 using MarketEye.Infrastructure.MarketData.Bhavcopy;
 using MarketEye.Infrastructure.Persistence;
+using MarketEye.Infrastructure.Persistence.TypeHandlers;
 using MarketEye.Infrastructure.Screening;
 using MarketEye.Application.Screening;
 using MarketEye.Domain.Screening;
@@ -19,6 +20,10 @@ public static class InfrastructureServiceCollectionExtensions
     public static IServiceCollection AddMarketEyeInfrastructure(
         this IServiceCollection services, IConfiguration config)
     {
+        // Dapper cannot map SQL date -> DateOnly on its own, and the failure is a runtime cast
+        // exception on the first real query. Registered once, at composition.
+        DapperTypeHandlers.Register();
+
         var cs = config.GetConnectionString("MarketEye")
                  ?? throw new InvalidOperationException(
                      "ConnectionStrings:MarketEye is not configured. Copy .env.example to .env and run 'docker compose up -d'.");
