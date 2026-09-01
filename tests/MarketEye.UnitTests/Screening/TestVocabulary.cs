@@ -1,3 +1,4 @@
+using MarketEye.Domain.Entities;
 using MarketEye.Domain.Screening;
 using MarketEye.Domain.Screening.Vocabulary;
 
@@ -16,17 +17,17 @@ internal sealed class TestVocabulary : IMetricConceptVocabulary
     {
         ["PeRatio"] = new()
         {
-            Name = "PeRatio", DisplayName = "P/E ratio", ColumnName = "Pe",
+            Name = "PeRatio", DisplayName = "P/E ratio", ColumnName = "Pe", Source = MetricSource.FundamentalRatio,
             AllowedOperators = Numeric, MinValue = 0m, MaxValue = 1000m,
         },
         ["Rsi14"] = new()
         {
-            Name = "Rsi14", DisplayName = "RSI (14)", ColumnName = "Rsi14",
+            Name = "Rsi14", DisplayName = "RSI (14)", ColumnName = "Rsi14", Source = MetricSource.Indicator,
             AllowedOperators = Numeric, MinValue = 0m, MaxValue = 100m,
         },
         ["NetIncome"] = new()
         {
-            Name = "NetIncome", DisplayName = "Net income", ColumnName = "NetIncome",
+            Name = "NetIncome", DisplayName = "Net income", ColumnName = "NetIncome", Source = MetricSource.FundamentalRatio,
             AllowedOperators = Numeric, MinValue = -1_000_000_000m, MaxValue = 1_000_000_000m,
         },
     };

@@ -1,0 +1,45 @@
+# Nightly ingestion trigger (PLAN.md §3 as amended, docs/adr/0006).
+#
+# App Service F1 has no Always On: the app unloads after ~20 minutes idle, so an in-process
+# BackgroundService timer silently never fires. An external cron calling a protected endpoint is
+# the lightest fix that works, and it adds no Azure resource at all.
+name: Nightly ingest
+
+on:
+  schedule:
+    # 19:30 UTC = 01:00 IST, comfortably after the NSE bhavcopy for the session is published.
+    - cron: "30 19 * * 1-5"
+  workflow_dispatch:
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger ingestion
+        env:
+          BASE_URL: ${{ secrets.MARKETEYE_BASE_URL }}
+          INGEST_SECRET: ${{ secrets.MARKETEYE_INGEST_SECRET }}
+        run: |
+          if [ -z "$BASE_URL" ] || [ -z "$INGEST_SECRET" ]; then
+            echo "::error::MARKETEYE_BASE_URL and MARKETEYE_INGEST_SECRET must be set as repository secrets."
+            exit 1
+          fi
+
+          # F1 cold-starts after idle, so the first request can take 20s+. Retry rather than
+          # treating a cold start as a failed night.
+          for attempt in 1 2 3; do
+            code=$(curl -sS -o /tmp/out.json -w '%{http_code}' -X POST \
+              -H "X-Ingest-Secret: $INGEST_SECRET" \
+              --max-time 300 \
+              "$BASE_URL/api/ingest/trigger" || echo "000")
+
+            if [ "$code" = "200" ] || [ "$code" = "202" ]; then
+              echo "Ingestion accepted (HTTP $code)"; cat /tmp/out.json; exit 0
+            fi
+
+            echo "Attempt $attempt failed with HTTP $code"; cat /tmp/out.json 2>/dev/null || true
+            sleep 30
+          done
+
+          echo "::error::Ingestion trigger failed after 3 attempts."
+          exit 1

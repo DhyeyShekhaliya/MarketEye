@@ -6,6 +6,16 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
+// Blazor Server calls the API over HTTP. Base address comes from config so the same build runs
+// locally and on App Service.
+builder.Services.AddHttpClient("api", (sp, client) =>
+{
+    var baseUrl = sp.GetRequiredService<IConfiguration>()["Api:BaseUrl"] ?? "http://localhost:5199";
+    client.BaseAddress = new Uri(baseUrl);
+});
+builder.Services.AddScoped(sp =>
+    sp.GetRequiredService<IHttpClientFactory>().CreateClient("api"));
+
 var app = builder.Build();
 
 // Configure the HTTP request pipeline.

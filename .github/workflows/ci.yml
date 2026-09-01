@@ -1,0 +1,32 @@
+# Build and unit tests. PLAN.md §10 Phase 0 asked for this; it was deferred and is added here.
+#
+# Container-backed integration tests are NOT run: they start real SQL Server instances, and on
+# Apple Silicon those run emulated at ~2 GB each. They are opt-in behind MARKETEYE_INTEGRATION=1.
+# Enabling them on CI is reasonable later -- GitHub runners are amd64, so no emulation -- but that
+# is a deliberate choice rather than a default.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore MarketEye.sln
+
+      - name: Build
+        run: dotnet build MarketEye.sln -c Release --no-restore
+
+      - name: Test
+        run: dotnet test MarketEye.sln -c Release --no-build

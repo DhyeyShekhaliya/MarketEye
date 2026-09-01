@@ -1,3 +1,5 @@
+using MarketEye.Domain.Entities;
+
 namespace MarketEye.Domain.Screening.Vocabulary;
 
 /// <summary>
@@ -22,6 +24,9 @@ public sealed record MetricConcept
     /// reaches SQL.
     /// </summary>
     public required string ColumnName { get; init; }
+
+    /// <summary>Which table the column lives on, so the compiler knows which alias to qualify with.</summary>
+    public required MetricSource Source { get; init; }
 
     /// <summary>Operators that make sense for this metric.</summary>
     public required IReadOnlyList<ComparisonOperator> AllowedOperators { get; init; }

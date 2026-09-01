@@ -1,7 +1,13 @@
+using System.Security.Cryptography;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using MarketEye.Infrastructure.DependencyInjection;
 using MarketEye.Infrastructure.Persistence;
+using MarketEye.Infrastructure.Ingestion;
+using MarketEye.Infrastructure.Screening;
+using MarketEye.Application.Screening;
+using MarketEye.Domain.Screening;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -35,7 +41,9 @@ if (app.Environment.IsDevelopment())
     // 'dotnet ef database update' or a migration bundle: migrating on startup races
     // across scaled-out instances and gives no rollback path.
     using var scope = app.Services.CreateScope();
-    await scope.ServiceProvider.GetRequiredService<MarketEyeDbContext>().Database.MigrateAsync();
+    var db = scope.ServiceProvider.GetRequiredService<MarketEyeDbContext>();
+    await db.Database.MigrateAsync();
+    await MetricConceptSeed.SeedAsync(db, CancellationToken.None);
 }
 
 app.MapHealthChecks("/health");
@@ -47,7 +55,88 @@ app.MapGet("/", () => Results.Ok(new
     disclaimer = "Educational purposes only. Not investment advice.",
 }));
 
+// The controlled vocabulary (§5.2). Exposed because it is a feature, not an implementation
+// detail: a user who disagrees with what "cheap" means must be able to see and edit the number.
+app.MapGet("/api/concepts", async (MarketEyeDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.MetricConcepts.AsNoTracking()
+        .OrderBy(c => c.Name)
+        .Select(c => new
+        {
+            c.Name, c.DisplayName, c.Description, c.Unit,
+            c.MinValue, c.MaxValue, c.DefaultThreshold, c.DefaultOperator,
+        })
+        .ToListAsync(ct)));
+
+app.MapPost("/api/screen", async (
+    ScreenRequest request,
+    ScreeningEngine engine,
+    SnapshotLifecycle snapshots,
+    CancellationToken ct) =>
+{
+    var asOf = request.AsOfDate ?? DateOnly.FromDateTime(DateTime.UtcNow);
+
+    var snapshot = await snapshots.LatestSealedAsync(asOf, ct);
+    if (snapshot is null)
+    {
+        // No sealed snapshot means no data has been ingested yet. Returning an empty result set
+        // would look like "nothing matched", which is a different and much more misleading answer.
+        return Results.Problem(
+            detail: $"No sealed data snapshot exists at or before {asOf:yyyy-MM-dd}. Run ingestion first.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    try
+    {
+        var result = await engine.RunAsync(request.Criteria, snapshot, ct);
+        return Results.Ok(new
+        {
+            result.Rows,
+            result.SnapshotId,
+            result.AsOfDate,
+            result.DurationMs,
+            disclaimer = "Educational purposes only. Not investment advice.",
+        });
+    }
+    catch (InvalidOperationException ex)
+    {
+        // §5.1: validation failures are answers, not server errors. The caller needs to know
+        // which concept was rejected so §5.3's panel can ask about it.
+        return Results.ValidationProblem(new Dictionary<string, string[]>
+        {
+            ["criteria"] = [ex.Message],
+        });
+    }
+});
+
+// Ingestion trigger. App Service F1 has no Always On, so an in-process timer never fires; an
+// external cron calls this instead (docs/adr/0006). Shared-secret protected -- this endpoint
+// writes data, so it must not be open.
+app.MapPost("/api/ingest/trigger", (HttpContext http, IConfiguration config) =>
+{
+    var expected = config["Ingestion:TriggerSecret"];
+    if (string.IsNullOrWhiteSpace(expected))
+    {
+        return Results.Problem(
+            detail: "Ingestion:TriggerSecret is not configured; refusing to expose an unprotected write endpoint.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    var provided = http.Request.Headers["X-Ingest-Secret"].ToString();
+    if (!CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(provided), Encoding.UTF8.GetBytes(expected)))
+    {
+        return Results.Unauthorized();
+    }
+
+    // Phase 1 wiring point: the bhavcopy download and DailyIngestionJob call land here once the
+    // NSE archive client is written. Kept explicit so the endpoint is not silently a no-op.
+    return Results.Accepted(value: new { status = "accepted", note = "Bhavcopy client not yet wired." });
+});
+
 app.Run();
+
+/// <summary>Request body for POST /api/screen.</summary>
+public sealed record ScreenRequest(ScreenCriteria Criteria, DateOnly? AsOfDate);
 
 /// <summary>Exposed so MarketEye.IntegrationTests can drive the host with WebApplicationFactory.</summary>
 public partial class Program;

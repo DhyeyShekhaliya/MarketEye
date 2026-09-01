@@ -1,0 +1,207 @@
+@page "/screen"
+@using System.Net.Http.Json
+@using System.Text.Json
+@using System.Text.Json.Serialization
+@inject HttpClient Http
+@rendermode InteractiveServer
+
+<PageTitle>Screen — MarketEye</PageTitle>
+
+<h1>Screen</h1>
+
+<p class="lede">
+    Build a screen from the controlled vocabulary. Thresholds are yours to set — the definitions
+    come from a table you can inspect, not from a model's opinion.
+</p>
+
+@if (_concepts is null)
+{
+    <p><em>Loading vocabulary…</em></p>
+}
+else if (_concepts.Count == 0)
+{
+    <div class="notice">
+        No metric concepts are defined. Run the API once so the vocabulary seeds.
+    </div>
+}
+else
+{
+    <div class="filters">
+        @foreach (var (row, index) in _rows.Select((r, i) => (r, i)))
+        {
+            <div class="filter-row">
+                <select @bind="row.Field">
+                    @foreach (var c in _concepts)
+                    {
+                        <option value="@c.Name">@c.DisplayName</option>
+                    }
+                </select>
+
+                <select @bind="row.Operator">
+                    <option value="LessThan">&lt;</option>
+                    <option value="LessThanOrEqual">&le;</option>
+                    <option value="GreaterThan">&gt;</option>
+                    <option value="GreaterThanOrEqual">&ge;</option>
+                </select>
+
+                <input type="number" step="any" @bind="row.Value" />
+
+                <button class="link" @onclick="() => RemoveRow(index)"
+                        disabled="@(_rows.Count == 1)">Remove</button>
+            </div>
+        }
+    </div>
+
+    <div class="actions">
+        <button @onclick="AddRow" disabled="@(_rows.Count >= 20)">Add filter</button>
+        <button class="primary" @onclick="RunAsync" disabled="@_running">
+            @(_running ? "Running…" : "Run screen")
+        </button>
+        @if (_rows.Count >= 20)
+        {
+            <span class="hint">Maximum of 20 comparisons (§6).</span>
+        }
+    </div>
+
+    @if (_error is not null)
+    {
+        <div class="error">@_error</div>
+    }
+
+    @if (_result is not null)
+    {
+        <div class="result-meta">
+            @_result.Rows.Count matches ·
+            snapshot #@_result.SnapshotId as of @_result.AsOfDate.ToString("yyyy-MM-dd") ·
+            @_result.DurationMs ms
+        </div>
+
+        @if (_result.Rows.Count == 0)
+        {
+            <p><em>No securities matched.</em></p>
+        }
+        else
+        {
+            <table class="results">
+                <thead>
+                    <tr>
+                        <th>Ticker</th><th>Name</th><th>Sector</th>
+                        <th class="num">Close</th><th>Price date</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var r in _result.Rows)
+                    {
+                        <tr>
+                            <td>@r.Ticker</td>
+                            <td>@r.Name</td>
+                            <td>@(r.Sector ?? "—")</td>
+                            @* Raw Close: what actually traded. AdjClose is for returns only (§4.4). *@
+                            <td class="num">@r.Close.ToString("N2")</td>
+                            <td>@r.PriceDate.ToString("yyyy-MM-dd")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+    }
+}
+
+@code {
+    private List<ConceptDto>? _concepts;
+    private readonly List<FilterRow> _rows = [new()];
+    private ScreenResponse? _result;
+    private string? _error;
+    private bool _running;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _concepts = await Http.GetFromJsonAsync<List<ConceptDto>>("/api/concepts") ?? [];
+            if (_concepts.Count > 0) _rows[0].Field = _concepts[0].Name;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not load the vocabulary: {ex.Message}";
+            _concepts = [];
+        }
+    }
+
+    private void AddRow()
+    {
+        if (_rows.Count >= 20) return;
+        _rows.Add(new FilterRow { Field = _concepts?.FirstOrDefault()?.Name ?? "" });
+    }
+
+    private void RemoveRow(int index)
+    {
+        if (_rows.Count > 1) _rows.RemoveAt(index);
+    }
+
+    private async Task RunAsync()
+    {
+        _running = true;
+        _error = null;
+        _result = null;
+
+        try
+        {
+            var criteria = new
+            {
+                universe = new { exchange = "NSE" },
+                root = new
+                {
+                    kind = "group",
+                    op = "And",
+                    children = _rows.Select(r => new
+                    {
+                        kind = "comparison",
+                        field = r.Field,
+                        @operator = r.Operator,
+                        value = r.Value,
+                    }).ToArray(),
+                },
+                limit = 200,
+            };
+
+            var response = await Http.PostAsJsonAsync("/api/screen", new { criteria });
+
+            if (response.IsSuccessStatusCode)
+            {
+                _result = await response.Content.ReadFromJsonAsync<ScreenResponse>();
+            }
+            else
+            {
+                // Validation failures are answers, not crashes: show which concept was rejected.
+                _error = await response.Content.ReadAsStringAsync();
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _running = false;
+        }
+    }
+
+    private sealed class FilterRow
+    {
+        public string Field { get; set; } = "";
+        public string Operator { get; set; } = "LessThan";
+        public decimal Value { get; set; }
+    }
+
+    private sealed record ConceptDto(
+        string Name, string DisplayName, string? Description, string? Unit,
+        decimal MinValue, decimal MaxValue, decimal? DefaultThreshold);
+
+    private sealed record ScreenResponse(
+        List<ScreenRowDto> Rows, int SnapshotId, DateOnly AsOfDate, int DurationMs);
+
+    private sealed record ScreenRowDto(
+        int Id, string Ticker, string Name, string Exchange,
+        string? Sector, string? Industry, decimal Close, decimal AdjClose, DateOnly PriceDate);
+}

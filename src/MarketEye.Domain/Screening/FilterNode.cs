@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace MarketEye.Domain.Screening;
 
 /// <summary>
@@ -7,6 +9,9 @@ namespace MarketEye.Domain.Screening;
 /// group. §6 is explicit that this is deliberate: adding OR/NOT in Phase 3+ then becomes additive
 /// rather than a rewrite of the type, the JSON schema, the validator and the UI at once.
 /// </summary>
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "kind")]
+[JsonDerivedType(typeof(Group), "group")]
+[JsonDerivedType(typeof(Comparison), "comparison")]
 public abstract record FilterNode
 {
     /// <summary>Depth of the subtree rooted here, counting this node as 1.</summary>

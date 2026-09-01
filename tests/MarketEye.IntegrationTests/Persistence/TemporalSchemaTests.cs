@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using MarketEye.Infrastructure.Persistence;
 using Testcontainers.MsSql;
 using Xunit;
+using MarketEye.IntegrationTests;
 
 namespace MarketEye.IntegrationTests.Persistence;
 
@@ -22,6 +23,7 @@ public class TemporalSchemaTests : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
+        if (!DockerGate.Enabled) return;
         await _sql.StartAsync(TestContext.Current.CancellationToken);
 
         var options = new DbContextOptionsBuilder<MarketEyeDbContext>()
@@ -33,7 +35,7 @@ public class TemporalSchemaTests : IAsyncLifetime
 
     public async ValueTask DisposeAsync() => await _sql.DisposeAsync();
 
-    [Fact]
+    [Fact(Skip = DockerGate.SkipReason, SkipUnless = nameof(DockerGate.Enabled), SkipType = typeof(DockerGate))]
     public async Task Fundamentals_is_system_versioned_with_a_history_table()
     {
         await using var conn = new SqlConnection(_sql.GetConnectionString());
@@ -48,7 +50,7 @@ public class TemporalSchemaTests : IAsyncLifetime
             "1 = HISTORY_TABLE");
     }
 
-    [Fact]
+    [Fact(Skip = DockerGate.SkipReason, SkipUnless = nameof(DockerGate.Enabled), SkipType = typeof(DockerGate))]
     public async Task Point_in_time_read_needs_both_conditions()
     {
         await using var conn = new SqlConnection(_sql.GetConnectionString());
@@ -82,7 +84,7 @@ public class TemporalSchemaTests : IAsyncLifetime
         visibleAfter.Should().Be(1);
     }
 
-    [Fact]
+    [Fact(Skip = DockerGate.SkipReason, SkipUnless = nameof(DockerGate.Enabled), SkipType = typeof(DockerGate))]
     public async Task Restating_a_figure_preserves_the_original_in_history()
     {
         await using var conn = new SqlConnection(_sql.GetConnectionString());
