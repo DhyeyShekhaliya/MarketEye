@@ -97,10 +97,29 @@ public sealed class BhavcopyIngestionService(
             .Where(s => ids.Contains(s.ProviderSecurityId))
             .ToDictionaryAsync(s => s.ProviderSecurityId, ct);
 
+        // Also match on ticker. This path runs without a learned ISIN map, so it resolves symbols
+        // to synthetic ids -- and would otherwise create a second row for a company the backfill
+        // already stored under its real ISIN, splitting one price history in two.
+        var symbols = rows.Select(r => r.Symbol).Distinct().ToList();
+        var byTicker = await db.Securities
+            .Where(s => symbols.Contains(s.Ticker))
+            .ToDictionaryAsync(s => s.Ticker, StringComparer.Ordinal, ct);
+
+        foreach (var kv in byTicker)
+        {
+            existing.TryAdd(kv.Value.ProviderSecurityId, kv.Value);
+        }
+
         foreach (var r in rows)
         {
             var providerId = isins.Resolve(r);
             if (providerId.Length == 0) continue;
+
+            // Prefer an existing row for this ticker over creating one under a different identity.
+            if (!existing.TryGetValue(providerId, out var byId) && byTicker.TryGetValue(r.Symbol, out var byName))
+            {
+                existing[providerId] = byName;
+            }
 
             if (existing.TryGetValue(providerId, out var security))
             {

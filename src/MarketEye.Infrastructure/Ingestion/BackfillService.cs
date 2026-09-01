@@ -150,27 +150,64 @@ public sealed class BackfillService(
         IReadOnlyList<BhavcopyRow> rows, DateOnly date,
         Dictionary<string, int> cache, CancellationToken ct)
     {
-        List<Security>? toAdd = null;
+        var unknown = new List<BhavcopyRow>();
         foreach (var r in rows)
         {
+            if (!cache.ContainsKey(isins.Resolve(r))) unknown.Add(r);
+        }
+        if (unknown.Count == 0) return;
+
+        // A security can arrive under two identities depending on which path created it. The
+        // nightly job runs without a learned ISIN map and produces a synthetic "NSE:SYMBOL" id;
+        // the backfill learns real ISINs from older archive files and produces "INE...". Inserting
+        // blind therefore violates the unique index on active tickers, and -- worse if it did not
+        // -- would split one company's price history across two rows.
+        //
+        // Reconcile on ticker, and upgrade a synthetic id to the real ISIN when it becomes known.
+        var tickers = unknown.Select(r => r.Symbol).Distinct().ToList();
+        var byTicker = await db.Securities
+            .Where(s => tickers.Contains(s.Ticker))
+            .ToDictionaryAsync(s => s.Ticker, StringComparer.Ordinal, ct);
+
+        var pendingByTicker = new Dictionary<string, Security>(StringComparer.Ordinal);
+
+        foreach (var r in unknown)
+        {
             var id = isins.Resolve(r);
-            if (cache.ContainsKey(id)) continue;
 
-            toAdd ??= [];
-            if (toAdd.Any(s => s.ProviderSecurityId == id)) continue;
+            if (byTicker.TryGetValue(r.Symbol, out var existing))
+            {
+                if (!string.Equals(existing.ProviderSecurityId, id, StringComparison.Ordinal)
+                    && IsinResolver.IsSynthetic(existing.ProviderSecurityId)
+                    && !IsinResolver.IsSynthetic(id))
+                {
+                    // Real ISIN beats a placeholder. Upgrading keeps one row per company and makes
+                    // §4.4's ticker-change reconciliation work for it from here on.
+                    logger.LogInformation(
+                        "Upgrading {Ticker} from {Old} to {New}", r.Symbol, existing.ProviderSecurityId, id);
+                    existing.ProviderSecurityId = id;
+                }
 
-            toAdd.Add(new Security
+                cache[existing.ProviderSecurityId] = existing.Id;
+                cache[id] = existing.Id;
+                continue;
+            }
+
+            if (pendingByTicker.ContainsKey(r.Symbol)) continue;
+
+            var created = new Security
             {
                 Ticker = r.Symbol, ProviderSecurityId = id, Name = r.Symbol,
                 Exchange = "NSE", IsActive = true,
-            });
+            };
+            pendingByTicker[r.Symbol] = created;
+            db.Securities.Add(created);
         }
 
-        if (toAdd is null) return;
-
-        db.Securities.AddRange(toAdd);
         await db.SaveChangesAsync(ct);
-        foreach (var s in toAdd) cache[s.ProviderSecurityId] = s.Id;
+
+        foreach (var s in pendingByTicker.Values) cache[s.ProviderSecurityId] = s.Id;
+        foreach (var s in byTicker.Values) cache[s.ProviderSecurityId] = s.Id;
         db.ChangeTracker.Clear();
     }
 
