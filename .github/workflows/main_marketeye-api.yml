@@ -21,13 +21,22 @@ jobs:
       - name: Set up .NET Core
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.x'
+          # global.json pins 10.0.400; keep this in the same band so the runner
+          # does not resolve an SDK the solution refuses to build with.
+          dotnet-version: '10.0.x'
 
-      - name: Build with dotnet
-        run: dotnet build --configuration Release
+      # Restore the whole solution (project references span all 11 projects) but
+      # build and publish ONLY the API. Azure's template runs these at the repo
+      # root, which fails here: `dotnet publish` cannot target a solution with
+      # multiple publishable projects, and would otherwise pick MarketEye.Web.
+      - name: Restore
+        run: dotnet restore MarketEye.sln
 
-      - name: dotnet publish
-        run: dotnet publish -c Release -o ${{env.DOTNET_ROOT}}/myapp
+      - name: Build API
+        run: dotnet build src/MarketEye.Api/MarketEye.Api.csproj --configuration Release --no-restore
+
+      - name: Publish API
+        run: dotnet publish src/MarketEye.Api/MarketEye.Api.csproj -c Release --no-build -o ${{env.DOTNET_ROOT}}/myapp
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
@@ -62,4 +71,7 @@ jobs:
           app-name: 'marketeye-api'
           slot-name: 'Production'
           package: .
-          
+
+# Tests are deliberately absent from this workflow. ci.yml already runs them on
+# every push to main; duplicating them here doubles Actions minutes and lets a
+# deploy fail for a reason that has nothing to do with deploying.
