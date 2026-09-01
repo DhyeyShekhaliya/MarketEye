@@ -215,7 +215,7 @@ Click **Apply**, then **Confirm**. The app restarts — expect ~30 seconds of do
 Still in the portal, App Service → **Overview** → note the **Default domain**, then from your Mac:
 
 ```bash
-curl -sS https://marketeye-api.azurewebsites.net/health
+curl -sS curl -sS marketeye-api-dcekame4fsdzctae.indiasouthcentral-01.azurewebsites.net/health
 ```
 
 Expect `Healthy`. The first request after a restart or idle period takes **10–20 seconds** — F1
@@ -247,26 +247,117 @@ placeholder page. `/health` will not answer until step 4. If you want to confirm
 before deploying, the portal's **Environment variables** page is the source of truth; the curl
 checks above only become meaningful after step 4.
 
-## Step 4 — deploy
+## Step 4 — deploy (Deployment Center + GitHub)
+
+Azure builds your code on GitHub's runners and pushes the result to App Service on every commit to
+`main`. No local install, and future deploys need nothing from you.
+
+### 4a. Push your outstanding commits first
+
+Deployment Center reads what is on GitHub, so anything unpushed will not deploy. From your Mac:
 
 ```bash
-dotnet publish src/MarketEye.Api -c Release -o ./publish
-cd publish && zip -r ../api.zip . && cd ..
-
-az webapp deploy \
-  --name marketeye-api --resource-group marketeye-rg \
-  --src-path api.zip --type zip
+cd "/Users/SONY/Documents/skills/Coding/net project"
+git status                 # confirm nothing uncommitted
+git push origin main
 ```
 
-Verify:
+### 4b. Connect Deployment Center
+
+1. [portal.azure.com](https://portal.azure.com) → **App Services** → **marketeye-api**
+2. Left sidebar → **Deployment** → **Deployment Center**
+3. **Source:** GitHub → **Authorize** if prompted, and grant access to the repository
+4. Select:
+   - **Organization:** your GitHub account
+   - **Repository:** `MarketEye`
+   - **Branch:** `main`
+5. **Authentication type:** **User-assigned identity** (the default). This avoids storing a
+   publish-profile password as a repository secret.
+6. **Save**
+
+Azure commits a workflow file to your repo — something like
+`.github/workflows/main_marketeye-api.yml` — and immediately starts a build.
+
+### 4c. Fix the generated workflow — it will fail as written
+
+**Expect the first build to fail.** Azure's template assumes one project per repository and runs
+`dotnet publish` at the root. This solution has eleven projects, so that command errors with
+*"Specify which project or solution file to use"*, or silently publishes the wrong one.
+
+Pull Azure's commit and correct the build steps:
 
 ```bash
-curl -sS https://marketeye-api.azurewebsites.net/health
-curl -sS https://marketeye-api.azurewebsites.net/api/concepts | head -c 300
+git pull origin main
 ```
 
-The first request after idle takes **10–20 seconds** — F1 cold start plus a serverless database
-resume. That is expected, not a fault.
+Open `.github/workflows/main_marketeye-api.yml` and make three changes:
+
+**1. Pin the SDK to 10.0.x** — the template often guesses an older version:
+
+```yaml
+      - name: Set up .NET Core
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+```
+
+**2. Target the API project explicitly** — replace the generated build/publish steps with:
+
+```yaml
+      - name: Build
+        run: dotnet build src/MarketEye.Api/MarketEye.Api.csproj --configuration Release
+
+      - name: Publish
+        run: dotnet publish src/MarketEye.Api/MarketEye.Api.csproj -c Release -o ${{env.DOTNET_ROOT}}/myapp
+```
+
+**3. Leave the tests out of this workflow.** `ci.yml` already runs them on every push; running them
+again here doubles the Actions minutes and makes a deploy fail for a reason unrelated to deploying.
+
+Commit and push:
+
+```bash
+git add .github/workflows/main_marketeye-api.yml
+git commit -m "Target the API project in the Azure deploy workflow"
+git push origin main
+```
+
+### 4d. Watch the build
+
+GitHub → your repo → **Actions** tab. The run has two jobs, **build** then **deploy**. First run
+takes 3-5 minutes.
+
+If **build** fails, read the step that went red — it is almost always the publish path above.
+If **deploy** fails with a permissions error, the user-assigned identity did not propagate; in
+Deployment Center click **Disconnect**, then reconnect and save again.
+
+### 4e. Verify
+
+```bash
+BASE=https://marketeye-api-dcekame4fsdzctae.indiasouthcentral-01.azurewebsites.net
+
+curl -sS "$BASE/health"
+curl -sS "$BASE/" | head -c 200
+curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$BASE/api/ingest/trigger"
+```
+
+Expect, in order:
+
+| Request | Expected | Meaning |
+|---|---|---|
+| `/health` | `Healthy` | App is running AND can reach Azure SQL |
+| `/` | JSON with `"name":"MarketEye"` | Your code, not Azure's placeholder page |
+| `/api/ingest/trigger` | `401` | The ingestion endpoint is guarded |
+
+**Before deploying, `/` returns an HTML welcome page and `/health` returns 404.** That is how you
+tell the difference between "not deployed" and "deployed but broken" — HTML means Azure's
+placeholder is still there.
+
+Give the first request 10-20 seconds. F1 cold start plus a serverless database resume is slow, and
+a timeout on the first attempt is not a failure.
+
+If `/health` returns **Unhealthy** rather than `Healthy`, the app deployed fine but cannot reach
+the database — go back to step 3b and check the connection string **Type** is `SQLAzure`.
 
 ## Step 5 — wire the cron
 
