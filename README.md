@@ -42,19 +42,58 @@ entirely and the screening and backtesting engines still work.
 
 ## Status
 
-**Phase 0 (Foundation) complete.** The solution scaffold, local SQL Server stack, point-in-time
-schema slice, and health-checked API are in place and tested.
+**Phase 1 complete.** The data pipeline and screener work end to end: ~2.5M daily bars across
+3,481 NSE securities, pre-computed indicators, fundamentals in a temporal table, a validated
+screening DSL, and a deployed API.
 
 | Phase | State |
 |---|---|
-| 0 — Foundation | Complete, except CI (deferred) |
-| 1 — Data pipeline + screener | Not started |
+| 0 — Foundation | Complete |
+| 1 — Data pipeline + screener | Complete, with three qualified exit criteria (below) |
 | 2 — Intent translation | Not started |
 | 3 — Backtesting | Not started |
 | 4 — Polish | Not started |
 
-There is no market data and no AI yet, by design: `PLAN.md` §10 builds the foundation before the
-flashy part, because the foundation is what makes the rest credible.
+There is no AI yet, by design: `PLAN.md` §10 builds the foundation before the flashy part, because
+the foundation is what makes the rest credible.
+
+### What Phase 1 actually delivered
+
+- **Prices and universe** from the NSE bhavcopy archive — survivorship-free by construction, since
+  a company that delisted in 2022 still appears in every file up to its last trading day
+- **Indicators** (SMA, EMA, RSI, MACD, ATR, realised volatility) computed at ingest and tested
+  against published reference values, not against their own output
+- **Corporate actions** — splits, bonus issues, rights issues and dividends, each with its own
+  adjustment convention, plus a reconciliation that checks stored factors against the price step
+  the market actually made
+- **Fundamentals** in a SQL Server temporal table, with derived valuation ratios
+- **`ScreenCriteria`** — a tree-shaped DSL with a fail-closed validator and a compiler that emits
+  parameterised SQL, so injection is structurally impossible rather than filtered
+- **Bias guards** that throw in the repository layer rather than relying on convention
+
+### Qualified exit criteria — stated, not hidden
+
+Three of `PLAN.md` §10's Phase 1 criteria are not fully met, and pretending otherwise would
+undermine the point of the rest:
+
+| Criterion | Status |
+|---|---|
+| Nightly job unattended for a week | Ran locally, ~250 sessions, no intervention. **Not met on Azure** — the deployed cron fails, most likely NSE refusing a datacentre IP |
+| §9 performance benchmarks | **Dropped by decision.** No valid measurement surface exists — see Benchmarks below |
+| Splits/dividends verified across 20 securities | Method built and proven; it found four real defects. But the deployed one-year window contains too few splits and bonuses to reach 20 securities. Satisfiable against the local five-year dataset |
+
+### Known limitations
+
+Each of these is a property of the data source rather than a bug, and each is argued in
+`docs/adr/0005`:
+
+- **Reporting dates are estimated.** The fundamentals provider supplies no filing date, so it is
+  derived from SEBI deadlines and deliberately errs late. Fundamentals screening is therefore
+  point-in-time correct to within the filing window, not to the day.
+- **Fundamentals are annual only**, so they can be up to ~15 months stale. A screen for
+  "profitable" answers *was profitable in the last reported financial year*.
+- **Roughly half the securities carry synthetic identifiers** where no ISIN was recoverable from
+  the archive. Ticker-change reconciliation cannot work for those.
 
 ## Getting started
 
@@ -72,7 +111,23 @@ The API applies EF migrations on startup **in Development only** and exposes `/h
 
 ```bash
 curl localhost:5199/health    # Healthy
-dotnet test                   # unit + integration
+dotnet test                   # 157 tests
+```
+
+Ingestion and screening:
+
+```bash
+# One trading day from the NSE bhavcopy
+curl -X POST -H "X-Ingest-Secret: $SECRET" "localhost:5199/api/ingest/run?date=2026-09-01"
+
+# Historical backfill from a cloned archive mirror (see docs/backfill-runbook.md)
+curl -X POST -H "X-Ingest-Secret: $SECRET" "localhost:5199/api/ingest/backfill?from=2021-09-01&to=2026-09-01"
+
+# Fundamentals and corporate actions (rate limited to 500 calls/day)
+curl -X POST -H "X-Ingest-Secret: $SECRET" "localhost:5199/api/ingest/fundamentals?max=25"
+
+# Verify adjustment factors against the market's own repricing
+curl "localhost:5199/api/reconcile/corporate-actions?securities=25"
 ```
 
 `MarketEye.IntegrationTests` and `MarketEye.BacktestTests` start their own SQL Server containers through
@@ -81,18 +136,33 @@ excluded from the default loop.
 
 ## Correctness
 
-Three properties are enforced structurally rather than by convention, because each one silently
-invalidates every result downstream if it slips:
+These properties are enforced structurally rather than by convention, because each one silently
+invalidates every result downstream if it slips.
 
 **Point-in-time reads need both conditions.** `FOR SYSTEM_TIME AS OF @date` handles restatements;
 `ReportedDate <= @date` handles reporting lag. Either alone is lookahead bias. Both are covered by
-integration tests that apply the real migrations to a real SQL Server.
+integration tests that apply the real migrations to a real SQL Server and assert that a filing is
+invisible before its reporting date.
 
 **`Close` and `AdjClose` are never interchangeable.** Trades execute at raw `Close`/`Open`; returns
 compute from `AdjClose`. Conflating them makes every multi-year backtest systematically wrong.
 
 **Delisted securities stay in the universe.** They exit at their last traded price, or at zero for
-bankruptcy. Removing them is survivorship bias, so `Security` rows are never deleted.
+bankruptcy. Removing them is survivorship bias, so `Security` rows are never deleted — and a guard
+throws if an assembled universe omits a security that was trading on the as-of date.
+
+**Ratios refuse rather than mislead.** A loss-making company gets no P/E rather than a negative
+one. A negative multiple sorts as "cheapest" in an ascending screen, so the worst businesses would
+top a value screen and a deliberately bad strategy would accidentally look good.
+
+**Adjustment factors are verified against the market.** On an ex-date the price steps by the
+action's economics, which implies a factor that can be compared against the one parsed from the
+provider's text. Disagreement means one of them is wrong — usually the text, because a bonus quoted
+"1:1" and a split quoted "2-for-1" are identical economics with inverted numbers.
+
+**Unparseable actions are left visible.** When a ratio cannot be extracted confidently, no
+adjustment is applied. That leaves a real step in the price series, which someone will notice — far
+better than a smooth series computed from a guessed factor.
 
 ## Benchmarks
 

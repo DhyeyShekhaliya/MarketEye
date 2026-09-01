@@ -525,16 +525,17 @@ Each phase ends **deployed, tested, and green in CI** before the next begins.
 > present (`.github/workflows/ci.yml`), so §10's "green CI" criterion is met.
 
 ### Phase 1 — Data pipeline + screener (~4–6 weeks) ← the part most people never finish
-- [ ] **Historical backfill strategy solved first** (see §12) — this blocks everything
-- [ ] Provider client: rate limiting, exponential backoff, idempotent re-runs
-- [ ] `SqlBulkCopy` ingestion; `IngestionRuns` history with failure capture
-- [ ] `CorporateActions` ingestion; split/dividend adjustment; ticker-change reconciliation
-- [ ] `DataSnapshot` write-then-seal lifecycle
-- [ ] Indicators computed at ingest, unit-tested against reference values
-- [ ] Fundamentals into the temporal table
-- [ ] `ScreenCriteria` tree type + validator + compiler (flat `AND` only)
-- [ ] Blazor UI: manual filter controls, results grid
-- [ ] Deployed to Azure
+- [x] **Historical backfill strategy solved first** (see §12) — NSE bhavcopy archive, `docs/adr/0005`
+- [x] Provider client: rate limiting, exponential backoff, idempotent re-runs
+- [x] `SqlBulkCopy` ingestion; `IngestionRuns` history with failure capture
+- [x] `CorporateActions` ingestion; split/**bonus**/**rights**/dividend adjustment; ticker-change
+      reconciliation on ISIN
+- [x] `DataSnapshot` write-then-seal lifecycle, including refusal to seal an empty snapshot
+- [x] Indicators computed at ingest, unit-tested against published reference values (Wilder's RSI)
+- [x] Fundamentals into the temporal table, plus derived `FundamentalRatios`
+- [x] `ScreenCriteria` tree type + validator + compiler (flat `AND` only)
+- [x] Blazor UI: manual filter controls, results grid
+- [x] Deployed to Azure (App Service F1 + Azure SQL free offer)
 
 **Exit:** ~~500+ tickers~~ **the full NIFTY 50 universe plus delisted members** (ADR-0005), 5 years
 of bars, nightly job unattended for a week, ~~§9 benchmark run and recorded~~. Splits and dividends
