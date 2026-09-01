@@ -104,11 +104,11 @@ MarketEye.sln
 | Frontend | Blazor Server | Fast to build. Know the tradeoff: a persistent circuit per visitor, which is a real hosting cost at scale |
 | Database | **SQL Server** (Developer Edition locally) | Temporal tables + columnstore — see §4 |
 | ORM | EF Core for CRUD/config; **Dapper + SqlBulkCopy for the hot path** | EF is too slow for millions of daily bars |
-| Jobs | `BackgroundService` + `PeriodicTimer` | Hangfire only if a dashboard is wanted |
+| Jobs | Timer-triggered Azure Function (Consumption) calling ingestion logic | Amended: App Service F1 has no Always On, so an in-process `BackgroundService` timer never fires. See `docs/adr/0006` |
 | AI | Azure OpenAI / OpenAI with **strict structured outputs** | Small/cheap tier is plenty — extraction, not reasoning |
 | Cache | `HybridCache` in-memory, two levels — see §5.5 | **No Redis in v1.** Add only when you can name what it fixed |
 | Data source | One provider behind `IMarketDataProvider` (EODHD or FMP) | Alpha Vantage free tier ≈ 25 req/day — unusable for backfill |
-| Deploy | Azure App Service + Azure SQL | One environment configured well beats three half-configured |
+| Deploy | Azure App Service **F1 (free)** + Azure SQL **free offer** | Free tiers chosen for budget. Consequences in `docs/adr/0006`, including §9 losing its measurement surface |
 | Observability | Application Insights + Serilog | — |
 
 **Do not add** until something concrete breaks: Redis, message queues, microservices, vector DB,
