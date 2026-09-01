@@ -1,0 +1,297 @@
+# Sift — AI-Assisted Stock Screener
+
+> Working name. Rename freely; it only appears in namespaces and the solution file.
+
+**One line:** A .NET platform where you describe a screening strategy in plain English, it compiles that into a validated SQL query over locally-ingested market data, and shows you both what matches today and how the strategy would have performed historically.
+
+---
+
+## 1. Scope
+
+### What this is
+- A **data pipeline** that ingests and stores equities fundamentals + price history in SQL Server.
+- A **screening engine** that filters securities on pre-computed fundamental and technical metrics.
+- An **intent translator** that turns natural language into a typed, validated filter object.
+- A **backtester** that replays a strategy against point-in-time-correct historical data.
+
+### What this is NOT (non-goals — keep these written down)
+- Not investment advice. Disclaimers on every results view and in every system prompt.
+- Not real-time or intraday. Daily bars, refreshed nightly. This is a deliberate choice, not a limitation.
+- Not connected to a brokerage. No orders, no portfolio sync, no money.
+- The AI does **not** decide anything. It maps prose onto filter definitions the user controls.
+
+### Success criteria
+The project is "done enough" when a stranger can visit the deployed URL, type
+*"cheap profitable small caps that aren't overbought"*, see the parsed filters as editable chips,
+run the screen against 5 years of real data, and view a backtest equity curve — and the README
+states measured p95 latency and nightly ingestion throughput.
+
+---
+
+## 2. Architecture
+
+```
+                  ┌──────────────────────────────────┐
+   Nightly        │  Sift.Ingestion (BackgroundService)│
+   03:00 UTC ────▶│  fetch → validate → SqlBulkCopy    │
+                  │  → compute indicators → write      │
+                  └───────────────┬──────────────────┘
+                                  │
+                          ┌───────▼────────┐
+                          │  SQL Server    │
+                          │  columnstore   │
+                          │  + temporal    │
+                          └───────▲────────┘
+                                  │
+  prose ──▶ Sift.Ai ──▶ ScreenCriteria ──▶ Validator ──▶ Sift.Application
+            (LLM,        (typed object)     (whitelist)    (LINQ → SQL)
+             strict                                              │
+             schema)                                             ▼
+                                                          results / backtest
+                                                                 │
+                                              Sift.Api ──▶ Sift.Web (Blazor Server)
+```
+
+**The rule that governs the whole AI design:** the model emits a typed object, never SQL, never a
+number it invented. Everything downstream of the validator is deterministic and testable.
+
+### Solution layout
+
+```
+Sift.sln
+├── src/
+│   ├── Sift.Domain/           entities, ScreenCriteria, MetricConcept — zero dependencies
+│   ├── Sift.Application/      screening engine, criteria compiler, backtest engine
+│   ├── Sift.Infrastructure/   EF Core DbContext, Dapper, SqlBulkCopy, provider clients
+│   ├── Sift.Ai/               LLM client, prompt templates, parse cache
+│   ├── Sift.Ingestion/        scheduled jobs, rate limiting, retry/backoff
+│   ├── Sift.Api/              ASP.NET Core Web API
+│   └── Sift.Web/              Blazor Server UI
+└── tests/
+    ├── Sift.UnitTests/        indicator math, criteria compiler, validator
+    ├── Sift.IntegrationTests/ Testcontainers + real SQL Server
+    └── Sift.AiEvals/          prompt → expected-criteria suite, runs in CI
+```
+
+---
+
+## 3. Tech stack (decided)
+
+| Layer | Choice | Why |
+|---|---|---|
+| Backend | ASP.NET Core Web API (.NET 9) | — |
+| Frontend | Blazor Server | Fast to build; know the tradeoff (stateful circuits, one WebSocket per user) for interviews |
+| Database | **SQL Server** (Developer Edition locally) | Temporal tables + clustered columnstore — see §4 |
+| ORM | EF Core for CRUD/config; **Dapper + SqlBulkCopy for the hot path** | EF is too slow for millions of daily bars |
+| Jobs | `BackgroundService` + `PeriodicTimer` (Hangfire only if a dashboard is wanted) | Fewer moving parts |
+| AI | Azure OpenAI / OpenAI with **strict structured outputs** | Small/cheap tier is plenty — this is extraction, not reasoning |
+| Cache | `HybridCache` in-memory | **No Redis in v1.** Add it only when you can name what it fixed |
+| Data source | Start with one provider (EODHD or FMP; Alpha Vantage free tier is ~25 req/day) | Abstract behind `IMarketDataProvider` from day one |
+| Deploy | Azure App Service + Azure SQL | One environment configured well beats three configured half-way |
+| Observability | Application Insights + structured logging (Serilog) | — |
+
+**Do not add:** Redis, a message queue, microservices, a vector DB, or Kubernetes until something
+concrete breaks without them. Every one of these invites "why?" in an interview and the answer
+must not be "it looked good on the résumé."
+
+---
+
+## 4. Data model
+
+### The two SQL Server features that justify the choice
+
+**Temporal tables → point-in-time correctness.** Fundamentals get restated. Backtesting against
+today's restated numbers is lookahead bias and silently invalidates every result.
+
+```sql
+CREATE TABLE Fundamentals (
+    SecurityId       INT NOT NULL,
+    FiscalPeriodEnd  DATE NOT NULL,
+    ReportedDate     DATE NOT NULL,     -- when the market actually learned this
+    Revenue          DECIMAL(18,2),
+    NetIncome        DECIMAL(18,2),
+    TotalDebt        DECIMAL(18,2),
+    ShareholdersEquity DECIMAL(18,2),
+    -- ...
+    ValidFrom DATETIME2 GENERATED ALWAYS AS ROW START,
+    ValidTo   DATETIME2 GENERATED ALWAYS AS ROW END,
+    PERIOD FOR SYSTEM_TIME (ValidFrom, ValidTo),
+    CONSTRAINT PK_Fundamentals PRIMARY KEY (SecurityId, FiscalPeriodEnd)
+) WITH (SYSTEM_VERSIONING = ON (HISTORY_TABLE = dbo.FundamentalsHistory));
+
+-- backtest queries become:
+SELECT * FROM Fundamentals FOR SYSTEM_TIME AS OF @asOfDate WHERE ...
+```
+
+EF Core supports this directly: `.IsTemporal()` on the entity, `.TemporalAsOf(date)` on the query.
+
+**Clustered columnstore → time-series scan speed.** ~10x compression and batch-mode execution.
+Apply to `PriceBars` and `Indicators`.
+
+### Tables
+
+| Table | Notes |
+|---|---|
+| `Securities` | Ticker, Name, Exchange, Sector, Industry, **IsActive, DelistedDate** |
+| `PriceBars` | (SecurityId, Date) — OHLCV + AdjClose. **Clustered columnstore.** Partition by year past ~3y |
+| `Indicators` | (SecurityId, Date) — Sma50, Sma200, Rsi14, Macd, MacdSignal, Atr14, Vol30. **Clustered columnstore.** Pre-computed at ingest |
+| `Fundamentals` | **Temporal.** Raw reported figures |
+| `FundamentalRatios` | Derived: PE, PB, PS, ROE, ROIC, DebtToEquity, GrossMargin, FcfYield |
+| `MetricConcepts` | The AI's vocabulary — see §5 |
+| `Strategies` | UserId, Name, CriteriaJson |
+| `ScreenRuns` | StrategyId, RunAt, ResultCount, DurationMs — your own latency telemetry |
+| `IngestionRuns` | Source, StartedAt, CompletedAt, Status, RecordsWritten, Error — job history |
+| `ParseCache` | PromptHash (unique), NormalizedPrompt, CriteriaJson, Model, CreatedAt |
+| `Alerts` | Phase 4 |
+
+### Two data decisions that signal domain depth
+
+1. **Keep delisted securities.** If you only ingest today's index members, every backtest silently
+   excludes companies that went bankrupt and every strategy looks brilliant. This is survivorship
+   bias and it is the single most common way amateur backtests lie.
+2. **Compute indicators at ingest, never at query time.** SMA/EMA are fine as window functions, but
+   RSI, MACD and ATR are awkward in T-SQL and slow on the fly. Compute in C# during the nightly job,
+   store the result, and screening collapses to a flat indexable `WHERE`.
+
+---
+
+## 5. AI design
+
+### Principle
+The model reads intent and selects filters. It does not decide, score, rank, or produce numbers.
+Every threshold it emits traces back to a definition stored in the database.
+
+### Vocabulary lives in SQL, not in the prompt
+
+If the model decides what "quality" means, you get a different answer every run and nothing is
+testable. So define concepts as data:
+
+```
+MetricConcepts
+  Name        "quality"
+  Aliases     ["high quality", "well run", "solid business"]
+  Definition  [ { ROE >= 15 }, { DebtToEquity <= 0.5 }, { GrossMarginStdDev5y <= 0.05 } ]
+```
+
+The model's only job: map fuzzy prose → concept names + explicit numeric filters.
+**You define what the words mean; it picks which words apply.** Auditable, consistent, user-editable,
+and unit-testable.
+
+### Pipeline
+
+```
+prose
+  → LLM call, strict JSON schema / tool calling
+  → ScreenCriteria { Filters[], Universe, SortBy, Limit }
+  → Validator: whitelist of fields, allowed operators, sane ranges, max filter count
+  → LINQ expression tree → parameterized SQL
+```
+
+The model never sees or emits SQL. Injection is structurally impossible, not merely defended against.
+
+### The UX that earns trust: confirm-before-run
+
+Render the parse back as editable chips:
+
+```
+"cheap profitable small caps that aren't overbought"
+
+  [Market Cap < $2B ×]  [P/E < 15 ×]  [ROE > 15% ×]  [RSI(14) < 70 ×]   [ Run screen ]
+```
+
+The user sees exactly what was understood and fixes it in one click. This removes the trust problem
+entirely, demos far better than a black box, and every correction is a free eval case.
+
+### Supporting pieces
+- **Parse cache** keyed on normalized-prompt hash. Repeat queries cost zero tokens; hit rate will be high.
+- **Fail to a question, not a guess.** Low confidence or an unmapped term → ask a clarifying question.
+- **Eval suite** (`Sift.AiEvals`): ~50 `prompt → expected ScreenCriteria` pairs, scored exact + partial,
+  **run in CI on every commit**. Gate: ≥85%. This is what turns "I called an LLM API" into
+  "I engineered an LLM feature."
+
+---
+
+## 6. Phases
+
+Ship each phase fully — deployed, tested, in CI — before starting the next. The failure mode for
+this project is 40% of five features.
+
+### Phase 0 — Foundation (~1 week)
+- [ ] Solution scaffold per §2
+- [ ] `docker-compose` with SQL Server; EF Core migrations run on startup in dev
+- [ ] GitHub Actions: build → test → (later) deploy
+- [ ] Health check endpoint, Serilog, App Insights wired
+- [ ] `IMarketDataProvider` interface + a stub implementation returning fixture data
+
+**Exit:** `docker compose up` gives a running API with a live DB and green CI.
+
+### Phase 1 — Data pipeline + screener (~2–3 weeks) ← the part most people never finish
+- [ ] Real provider client: rate limiting, exponential backoff, idempotent re-runs
+- [ ] `SqlBulkCopy` ingestion of price bars; `IngestionRuns` history with failure capture
+- [ ] Indicator computation (SMA, EMA, RSI, MACD, ATR) — **unit tested against known values**
+- [ ] Fundamentals ingestion into the temporal table
+- [ ] `ScreenCriteria` → LINQ → SQL compiler
+- [ ] Blazor UI with manual filter controls + results grid
+- [ ] Deployed to Azure
+
+**Exit:** 500+ tickers, 5 years of daily bars, nightly job runs unattended for a week without
+intervention, screen returns in <500ms p95. Record the numbers.
+
+### Phase 2 — Intent translation (~1–2 weeks)
+- [ ] `MetricConcepts` seeded with ~20 concepts
+- [ ] LLM parse with strict structured output
+- [ ] Validator + whitelist
+- [ ] Editable chip UI with confirm-before-run
+- [ ] `ParseCache`
+- [ ] `Sift.AiEvals` with 50 cases, wired into CI as a gate
+
+**Exit:** ≥85% eval score, and a failed parse degrades to a clarifying question rather than a wrong screen.
+
+### Phase 3 — Backtesting (~2–3 weeks) ← the differentiator
+- [ ] Point-in-time universe reconstruction via `FOR SYSTEM_TIME AS OF`
+- [ ] Rebalance loop (monthly/quarterly, equal-weight to start)
+- [ ] Delisted securities included, with delisting treated as a position exit
+- [ ] Metrics: CAGR, max drawdown, Sharpe, win rate, turnover
+- [ ] Equity curve vs. a benchmark (SPY)
+- [ ] Explicit lookahead-bias test: assert no data with `ReportedDate > asOfDate` is ever read
+
+**Exit:** A deliberately bad strategy backtests badly. (If everything looks good, you have a bug.)
+
+### Phase 4 — Polish
+- [ ] Alerts: "notify me when a security enters/exits my strategy"
+- [ ] Saved strategies, sharing
+- [ ] README with measured numbers; 3–4 short ADRs
+
+---
+
+## 7. Key decisions to record as ADRs
+
+Write these as ~1 page each in `docs/adr/`. They are the difference between "I copied a stack"
+and "I made decisions."
+
+1. **SQL Server over PostgreSQL** — temporal tables and columnstore, weighed against losing pgvector.
+2. **Dapper + SqlBulkCopy for the ingest path, EF Core elsewhere** — knowing when *not* to use your ORM.
+3. **Pre-computed indicators over query-time computation** — write amplification traded for read latency.
+4. **LLM emits a typed object, never SQL** — security and testability.
+5. **No Redis in v1** — deliberately deferred; state the trigger that would add it.
+
+---
+
+## 8. Risks
+
+| Risk | Mitigation |
+|---|---|
+| Free-tier API limits (Alpha Vantage ≈ 25 req/day) | Ingest nightly into own DB and screen locally — this is the correct architecture anyway. Budget for one paid tier (~$20/mo) if needed |
+| Data quality: splits, dividends, ticker changes | Always store adjusted close; reconcile against a second source for a 20-ticker sample |
+| Scope creep | Phases are sequential and each ends deployed. No starting Phase N+1 with Phase N unshipped |
+| LLM cost | Cache on prompt hash; small model tier; hard per-user rate limit |
+| Legal | "Educational purposes only, not investment advice" on every results view and in the system prompt |
+
+---
+
+## 9. Open questions
+
+- [ ] Which market(s)? US-only keeps the data problem tractable — recommended for v1.
+- [ ] Universe size for v1? Suggest S&P 500 + delisted members, expand later.
+- [ ] Auth: ASP.NET Core Identity, or Entra ID? (Identity is simpler and enough.)
+- [ ] Multi-user from the start, or single-user until Phase 4?
