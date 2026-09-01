@@ -9,6 +9,7 @@ using MarketEye.Infrastructure.DependencyInjection;
 using MarketEye.Infrastructure.Persistence;
 using MarketEye.Infrastructure.Ingestion;
 using MarketEye.Ingestion.Jobs;
+using MarketEye.Infrastructure.Reconciliation;
 using MarketEye.Infrastructure.Screening;
 using MarketEye.Application.Screening;
 using MarketEye.Domain.Screening;
@@ -338,11 +339,24 @@ app.MapPost("/api/ingest/fundamentals", async (
 // §12: splits and dividends verified against a sample of securities. Read-only, so it is not
 // behind the ingestion secret -- it exposes no more than the screening endpoints already do.
 app.MapGet("/api/reconcile/corporate-actions", async (
-    MarketEye.Infrastructure.Reconciliation.CorporateActionReconciler reconciler,
+    CorporateActionReconciler reconciler,
     int? securities,
     CancellationToken ct) =>
 {
-    var report = await reconciler.RunAsync(securities ?? 20, ct);
+    ReconciliationReport report;
+    try
+    {
+        report = await reconciler.RunAsync(securities ?? 20, ct);
+    }
+    catch (Exception ex)
+    {
+        // An empty 500 body sent the last debugging round in the wrong direction.
+        return Results.Problem(
+            title: "Reconciliation failed",
+            detail: $"{ex.GetType().Name}: {ex.Message}",
+            statusCode: StatusCodes.Status500InternalServerError);
+    }
+
     return Results.Ok(new
     {
         report.DistinctSecurities,
@@ -354,8 +368,8 @@ app.MapGet("/api/reconcile/corporate-actions", async (
         // Disagreements first: those are the rows a human needs to look at, and burying them
         // under dozens of passes is how a reconciliation becomes a rubber stamp.
         checks = report.Checks
-            .OrderBy(c => c.Status == MarketEye.Infrastructure.Reconciliation.ReconciliationStatus.Disagrees ? 0
-                        : c.Status == MarketEye.Infrastructure.Reconciliation.ReconciliationStatus.Unadjusted ? 1 : 2)
+            .OrderBy(c => c.Status == ReconciliationStatus.Disagrees ? 0
+                        : c.Status == ReconciliationStatus.Unadjusted ? 1 : 2)
             .ThenByDescending(c => c.DeviationFraction)
             .Take(60),
     });

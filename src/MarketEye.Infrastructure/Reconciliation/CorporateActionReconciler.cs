@@ -80,15 +80,25 @@ public sealed class CorporateActionReconciler(string connectionString)
                 (SELECT COUNT(*) FROM dbo.CorporateActions x
                   WHERE x.SecurityId = ca.SecurityId AND x.EffectiveDate = ca.EffectiveDate
                     AND x.ActionType IN ('Split','Bonus','Rights')) AS PriceActionsOnDate,
-                (SELECT EXP(SUM(LOG(x.AdjustmentFactor))) FROM dbo.CorporateActions x
-                  WHERE x.SecurityId = ca.SecurityId AND x.EffectiveDate = ca.EffectiveDate
-                    AND x.ActionType IN ('Split','Bonus','Rights')
-                    AND x.AdjustmentFactor > 0) AS CombinedFactorOnDate
+                ca.SecurityId AS ActionSecurityId
             FROM dbo.CorporateActions ca
             JOIN dbo.Securities s ON s.Id = ca.SecurityId
             WHERE ca.ActionType IN ('Split', 'Bonus', 'Rights', 'Dividend')
             ORDER BY ca.EffectiveDate DESC;
             """, new { take = maxSecurities * 5, window = MaxBarDistanceDays }, cancellationToken: ct))).ToList();
+
+        // Combined same-date factors are computed here rather than in SQL. The obvious SQL form,
+        // EXP(SUM(LOG(factor))), is a domain error waiting to happen: the engine may evaluate LOG
+        // before the "> 0" filter, and the whole query dies with an empty response body.
+        var combinedByDate = rows
+            .Where(r => r.AdjustmentFactor is > 0
+                     && r.ActionType is nameof(CorporateActionType.Split)
+                                     or nameof(CorporateActionType.Bonus)
+                                     or nameof(CorporateActionType.Rights))
+            .GroupBy(r => (r.SecurityId, r.EffectiveDate))
+            .ToDictionary(
+                g => g.Key,
+                g => g.Aggregate(1m, (acc, r) => acc * r.AdjustmentFactor!.Value));
 
         var report = new ReconciliationReport();
 
@@ -118,8 +128,9 @@ public sealed class CorporateActionReconciler(string connectionString)
 
             // Compare against the COMBINED factor for the date when several actions share it.
             var comparisonFactor = r.PriceActionsOnDate > 1
-                ? r.CombinedFactorOnDate
-                : r.AdjustmentFactor;
+                && combinedByDate.TryGetValue((r.SecurityId, r.EffectiveDate), out var combined)
+                    ? combined
+                    : r.AdjustmentFactor;
 
             check.ActionsSharingDate = r.PriceActionsOnDate;
             check.ComparisonFactor = comparisonFactor is null ? null : Math.Round(comparisonFactor.Value, 4);
@@ -166,7 +177,7 @@ public sealed class CorporateActionReconciler(string connectionString)
         int SecurityId, string Ticker, DateOnly EffectiveDate, string ActionType,
         decimal? AdjustmentFactor, decimal? DividendAmount, string? RawDescription,
         decimal? CloseOnOrAfter, decimal? CloseBefore, decimal? AdjOnOrAfter, decimal? AdjBefore,
-        int PriceActionsOnDate, decimal? CombinedFactorOnDate);
+        int PriceActionsOnDate, int ActionSecurityId);
 }
 
 public enum ReconciliationStatus
