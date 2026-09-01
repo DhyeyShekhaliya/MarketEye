@@ -134,13 +134,20 @@ whether the backfill endpoint is bulk or per-ticker.
 Two `IMarketDataProvider` implementations composed behind the interface, per the recommendation
 above.
 
-### Open item carried into implementation
+### Resolved: bonus and rights are included
 
-indianapi.in exposes corporate actions only as a `stockCorporateActionData` field on `/stock`, and
-does not document whether **bonus and rights issues** are included. ADR-0004 explains why those
-two are not optional in India. Until confirmed, corporate actions must be sourced from NSE's own
-corporate-actions reports rather than assumed present. Verify before the adjustment logic is
-written, not after.
+The open question — whether indianapi.in's `stockCorporateActionData` covers **bonus and rights
+issues** as well as splits and dividends — was confirmed **yes** with the vendor on 2026-09-02.
+
+That settles the corporate-actions source: indianapi.in supplies all four price-affecting action
+types, so NSE's separate corporate-actions reports are not needed as a second integration. ADR-0004
+explains why the two Indian-specific types were the deciding factor.
+
+Ingestion must still **verify the ratio convention per action type** rather than trusting a shared
+field. A bonus quoted "1:1" and a split quoted "2-for-1" are the same economics with inverted
+numbers, and `AdjustmentFactors` has separate functions for exactly that reason. A sample of known
+actions should be checked by hand before the adjustment output is trusted — which is what §12's
+20-security reconciliation is for.
 
 ### Consequence for §9
 

@@ -157,29 +157,95 @@ Basic and Standard S0–S2 tiers exclude columnstore. Recreate it on the right t
 
 ## Step 3 — configure the app
 
+Everything here is done **in the Azure portal**, in your browser. Nothing runs on your Mac for this
+step. You are telling the deployed app three things: where its database is, what secret guards the
+ingestion endpoint, and which API key to use for fundamentals.
+
+### 3a. Generate the ingestion secret
+
+This one command runs in **your Mac's Terminal**, because you need a random value and you will
+paste it into two places:
+
 ```bash
-SECRET=$(openssl rand -hex 32)
-
-az webapp config connection-string set \
-  --name marketeye-api --resource-group marketeye-rg \
-  --connection-string-type SQLAzure \
-  --settings MarketEye="$AZURE_SQL"
-
-az webapp config appsettings set \
-  --name marketeye-api --resource-group marketeye-rg \
-  --settings Ingestion__TriggerSecret="$SECRET" \
-             ASPNETCORE_ENVIRONMENT=Production \
-             Serilog__WriteTo__0__Name=Console
-
-echo "Save this for GitHub secrets: $SECRET"
+openssl rand -hex 32
 ```
 
-Two things that matter on F1:
+Copy the 64-character output somewhere temporary. It goes into Azure (3c) and into GitHub (step 5),
+and the two must match exactly or the nightly job returns 401.
 
-- **Console logging only.** The file sink is configured for local dev; F1 has ~1 GB of storage and
-  a rolling file sink will fill it. The setting above overrides `WriteTo` to Console.
-- **Leave `Ingestion:ArchivePath` unset** in Azure. Unset means the app uses `NseBhavcopyClient`
-  and fetches from NSE directly, which is correct for a one-file nightly job.
+### 3b. Add the database connection string
+
+1. [portal.azure.com](https://portal.azure.com) → **App Services** → click **marketeye-api**
+2. Left sidebar → **Settings** → **Environment variables**
+3. Open the **Connection strings** tab (not "App settings" — a different tab)
+4. **+ Add**
+   - **Name:** `MarketEye` — exactly this, no prefix. The app looks up
+     `ConnectionStrings:MarketEye`, and App Service adds the `ConnectionStrings:` part for you.
+   - **Value:** the same ADO.NET string you used for migrations, with your real password
+   - **Type:** **SQLAzure**
+5. **Apply**
+
+> The `Type` matters. App Service prefixes the environment variable differently per type
+> (`SQLAZURECONNSTR_` for SQLAzure, `SQLCONNSTR_` for SQLServer), and .NET only resolves
+> `ConnectionStrings:MarketEye` from the right one. The wrong type produces a "connection string
+> not configured" error at startup that looks like the value is missing entirely.
+
+### 3c. Add the app settings
+
+Same page, **App settings** tab → **+ Add** for each row:
+
+| Name | Value | Why |
+|---|---|---|
+| `Ingestion__TriggerSecret` | the value from 3a | Guards `/api/ingest/run`. Without it that endpoint refuses to run at all, rather than running unprotected. |
+| `Provider__IndianApi__ApiKey` | your indianapi.in key | Fundamentals (§4.1) |
+| `ASPNETCORE_ENVIRONMENT` | `Production` | Turns **off** startup migrations. Production migrates out of band — startup migration races across instances. |
+| `Serilog__WriteTo__0__Name` | `Console` | F1 has ~1 GB of storage and the default file sink will fill it |
+
+**Double underscores, not colons.** `Ingestion__TriggerSecret` maps to `Ingestion:TriggerSecret`.
+Colons do not work as environment variable names on Linux, which is what your F1 plan runs.
+
+Leave `Ingestion__ArchivePath` **unset**. Unset means the app fetches from NSE directly, which is
+right for a one-file nightly job. Setting it would point Azure at a local archive directory that
+does not exist there.
+
+Click **Apply**, then **Confirm**. The app restarts — expect ~30 seconds of downtime.
+
+### 3d. Verify the settings took
+
+Still in the portal, App Service → **Overview** → note the **Default domain**, then from your Mac:
+
+```bash
+curl -sS https://marketeye-api.azurewebsites.net/health
+```
+
+Expect `Healthy`. The first request after a restart or idle period takes **10–20 seconds** — F1
+cold start plus a serverless database resume. A timeout on the first try is normal; retry once
+before concluding anything is wrong.
+
+If it returns `Unhealthy`, the SQL health check is failing. Most likely causes, in order:
+
+| Cause | Fix |
+|---|---|
+| Connection string type is wrong | 3b — must be **SQLAzure** |
+| App Service cannot reach SQL | SQL **server** → Networking → **Allow Azure services** = Yes |
+| Password wrong in the string | Re-copy from the portal and replace `{your_password}` |
+
+Then check the secret is wired, without triggering an actual ingest:
+
+```bash
+curl -sS -X POST https://marketeye-api.azurewebsites.net/api/ingest/trigger
+```
+
+Expect **401 Unauthorized** — that is the correct answer for a request with no secret header. A
+**503** means `Ingestion__TriggerSecret` did not get set, and the app is refusing to expose an
+unprotected write endpoint. A **200** would mean the guard is not working at all.
+
+### What you have NOT done yet
+
+The app is configured but **no code is deployed** — App Service is still serving its default
+placeholder page. `/health` will not answer until step 4. If you want to confirm configuration
+before deploying, the portal's **Environment variables** page is the source of truth; the curl
+checks above only become meaningful after step 4.
 
 ## Step 4 — deploy
 

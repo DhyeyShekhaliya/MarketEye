@@ -29,6 +29,7 @@ public sealed class BackfillService(
     PriceBarBulkWriter priceWriter,
     IndicatorBulkWriter indicatorWriter,
     SnapshotLifecycle snapshots,
+    DelistingDetector delistings,
     ILogger<BackfillService> logger)
 {
     public async Task<BackfillReport> RunAsync(
@@ -100,6 +101,11 @@ public sealed class BackfillService(
 
         // Pass 2: derive once.
         report.IndicatorRows = await RecomputeAllAsync(ct);
+
+        // Pass 3: mark delistings. Must run AFTER all bars are loaded — a security's last bar is
+        // only knowable once the whole range is in. §7 and §8.2 both depend on this.
+        var delisted = await delistings.DetectAsync(ct);
+        report.DelistedDetected = delisted.MarkedDelisted;
 
         // Seal one snapshot for the final date, so screens have something to resolve against.
         if (report.BarsWritten > 0)
@@ -247,6 +253,7 @@ public sealed class BackfillReport
     public int SecuritiesCreated { get; set; }
     public int IsinsMapped { get; set; }
     public int SyntheticIds { get; set; }
+    public int DelistedDetected { get; set; }
     public int? SnapshotId { get; set; }
     public TimeSpan Elapsed { get; set; }
 }

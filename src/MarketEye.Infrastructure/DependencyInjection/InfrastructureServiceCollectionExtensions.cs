@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using MarketEye.Application.MarketData;
 using MarketEye.Infrastructure.MarketData;
 using System.Net;
@@ -44,6 +45,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton(new IndicatorBulkWriter(cs));
         services.AddSingleton<IsinResolver>();
         services.AddScoped<BackfillService>();
+        services.AddScoped(sp => new DelistingDetector(
+            cs, sp.GetRequiredService<ILoggerFactory>().CreateLogger<DelistingDetector>()));
 
         // NSE rejects plain HTTP clients. A cookie container is mandatory (the archive endpoints
         // require session cookies from the homepage) and so is a browser-like User-Agent.
