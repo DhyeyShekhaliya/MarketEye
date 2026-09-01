@@ -83,6 +83,14 @@ public sealed class FundamentalsIngestionService(
                 // cannot be reclaimed.
                 logger.LogError(ex, "Failed ingesting {Ticker}", security.Ticker);
                 report.Failed++;
+
+                // Critical: a failed SaveChanges leaves the shared DbContext holding the entities
+                // that could not be written. Every later operation on this context -- including the
+                // budget's own save -- then retries them and throws again, so ONE bad security
+                // fails the whole remaining run without making a single further API call.
+                //
+                // Observed exactly that: 5 securities "failed" while only 1 call was consumed.
+                db.ChangeTracker.Clear();
             }
             finally
             {
