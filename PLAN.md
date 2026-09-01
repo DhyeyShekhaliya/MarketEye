@@ -12,7 +12,8 @@ lookahead or survivorship bias.
 ## 1. Scope
 
 ### What this is
-- A **data pipeline** ingesting equities fundamentals, prices, and corporate actions into SQL Server.
+- A **data pipeline** ingesting **Indian (NSE) equities** fundamentals, prices, and corporate actions
+  into SQL Server. Market decided in revision 3 — see `docs/adr/0004`.
 - A **screening DSL** (`ScreenCriteria`) — a constrained intermediate representation between human
   intent and SQL.
 - An **intent translator** that maps prose onto that DSL. It selects concepts; it does not invent numbers.
@@ -158,7 +159,14 @@ on the same representative queries and put the measured numbers in the README.
 |---|---|
 | `Securities` | Ticker, Name, Exchange, Sector, Industry, **IsActive, DelistedDate, DelistingReason** |
 | `PriceBars` | (SecurityId, Date) — OHLCV, **`Close` and `AdjClose` kept separate**. Clustered columnstore |
-| `CorporateActions` | SecurityId, EffectiveDate, ActionType (Split / Dividend / TickerChange / Merger / Delisting), SplitRatio, DividendAmount, NewTicker |
+| `CorporateActions` | SecurityId, EffectiveDate, ActionType (Split / **Bonus** / **Rights** / Dividend / TickerChange / Merger / Delisting), AdjustmentFactor, DividendAmount, NewTicker |
+
+> **Revision 3 — Bonus and Rights are not optional in India (`docs/adr/0004`).** A *bonus issue* is
+> split-like but uses the opposite ratio convention (1:1 means one free share per share held, i.e. a
+> 2-for-1 split); reading it as a split ratio halves or doubles every historical price. A *rights
+> issue* is not a split at all — it dilutes, and needs its own adjustment factor. Ignoring it leaves
+> a price discontinuity that reads as a real return. Store a computed `AdjustmentFactor` per action
+> rather than a raw `SplitRatio`, so all four price-affecting action types share one code path.
 | `Indicators` | (SecurityId, Date) — Sma50, Sma200, Rsi14, Macd, MacdSignal, Atr14, Vol30. Pre-computed at ingest. Clustered columnstore |
 | `Fundamentals` | **Temporal.** Raw reported figures |
 | `FundamentalRatios` | Derived: PE, PB, PS, ROE, ROIC, DebtToEquity, GrossMargin, FcfYield |
@@ -349,10 +357,22 @@ BacktestDefinition
     WeightingMethod        EqualWeight (v1) | MarketCapWeight
     InitialCapital         decimal
     ExecutionPrice         NextOpen (v1) | NextClose
-    TransactionCostBps     default 10
+    TransactionCostBps     default 23   (India; see below)
     SlippageBps            default 5
     MaxPositions           int?
 ```
+
+> **Revision 3 — the cost defaults are India-calibrated (`docs/adr/0004`).** The original 10bps was
+> a US number. Indian delivery trades pay Securities Transaction Tax on **both** legs (~10bps each
+> way) plus stamp duty on the buy, exchange charges, SEBI fees and GST — roughly **22-25bps round
+> trip** even with a zero-brokerage discount broker. §7 already argues costs are not optional; the
+> point is stronger here, because the Indian figure is over 50% higher than the US one.
+>
+> **Circuit limits (no US equivalent).** Indian equities have daily price bands. A stock locked at
+> its upper circuit cannot be bought at that price, and an illiquid one can stay locked for
+> consecutive sessions. Filling at T+1's open regardless claims a trade that could not have
+> happened — the same class of error as lookahead. The rebalance loop must skip circuit-locked
+> fills and carry the intended trade forward, and §8.2 needs a guard for it.
 
 ### The rebalance loop — exact order of operations
 
@@ -386,13 +406,15 @@ Print them next to every equity curve. A backtest without displayed assumptions 
 
 ```
 Rebalance: Monthly   Weighting: Equal   Execution: Next open
-Transaction cost: 10 bps   Slippage: 5 bps   Benchmark: SPY (total return)
+Transaction cost: 23 bps   Slippage: 5 bps   Benchmark: NIFTY 50 (total return)
 Universe includes delisted securities.
 ```
 
 Metrics: CAGR, max drawdown, Sharpe, Sortino, win rate, **annual turnover**, **total costs paid**,
-and gross-vs-net CAGR. Benchmark against SPY total return. Keep the benchmark a config value —
-a `TickerSymbol` string, not an `IBenchmarkProvider` interface. Adding QQQ later is a row in a table.
+and gross-vs-net CAGR. Benchmark against **NIFTY 50 total return**. Keep the benchmark a config
+value — a `TickerSymbol` string, not an `IBenchmarkProvider` interface. Adding NIFTY 500 later is a
+row in a table. Note NIFTY publishes *price* and *total-return* indices separately; using the price
+index understates the benchmark exactly the way §4.4 warns about for individual securities.
 
 ---
 
@@ -442,6 +464,19 @@ The v1 target `<500ms p95` was unqualified and therefore unreproducible. Define 
 > **p95 < 500ms** for a screening query of 10 comparisons over a 500-security universe against a
 > sealed snapshot containing 5 years of daily bars, warm cache excluded from the measurement,
 > AI parse time excluded, measured server-side over 200 runs.
+
+> **Revision 3 — this definition is currently unmeasurable, and that is recorded rather than
+> quietly dropped (`docs/adr/0005`, `docs/adr/0006`).** Two things broke it:
+>
+> 1. **Universe.** The decided universe is NIFTY 50 plus delisted members — roughly 60-80
+>    securities, about a tenth of the 500 the definition names.
+> 2. **No valid measurement surface.** Local SQL Server runs emulated on Apple Silicon; App Service
+>    F1 is shared infrastructure with a 60 CPU-min/day cap and cold starts; Azure SQL's free tier
+>    auto-pauses. None produces numbers that mean anything.
+>
+> Until one of those is resolved, the README states benchmarks as **outstanding**. The
+> non-negotiables forbid publishing an estimate, and a measured number on an invalid surface is an
+> estimate wearing a lab coat.
 
 Benchmark suite to record in the README:
 
