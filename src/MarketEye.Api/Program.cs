@@ -5,6 +5,7 @@ using Serilog;
 using MarketEye.Infrastructure.DependencyInjection;
 using MarketEye.Infrastructure.Persistence;
 using MarketEye.Infrastructure.Ingestion;
+using MarketEye.Ingestion.Jobs;
 using MarketEye.Infrastructure.Screening;
 using MarketEye.Application.Screening;
 using MarketEye.Domain.Screening;
@@ -21,6 +22,7 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["ApplicationInsights:Connec
 }
 
 builder.Services.AddMarketEyeInfrastructure(builder.Configuration);
+builder.Services.AddScoped<DailyIngestionJob>();
 builder.Services.AddOpenApi();
 
 builder.Services.AddHealthChecks()
@@ -128,9 +130,49 @@ app.MapPost("/api/ingest/trigger", (HttpContext http, IConfiguration config) =>
         return Results.Unauthorized();
     }
 
-    // Phase 1 wiring point: the bhavcopy download and DailyIngestionJob call land here once the
-    // NSE archive client is written. Kept explicit so the endpoint is not silently a no-op.
-    return Results.Accepted(value: new { status = "accepted", note = "Bhavcopy client not yet wired." });
+    return Results.Ok(new { status = "ok", note = "POST /api/ingest/run performs the ingestion." });
+});
+
+// The actual ingestion run, kept separate from the auth check above for readability.
+app.MapPost("/api/ingest/run", async (
+    HttpContext http,
+    IConfiguration config,
+    BhavcopyIngestionService reader,
+    DailyIngestionJob job,
+    DateOnly? date,
+    CancellationToken ct) =>
+{
+    var expected = config["Ingestion:TriggerSecret"];
+    if (string.IsNullOrWhiteSpace(expected))
+    {
+        return Results.Problem(
+            detail: "Ingestion:TriggerSecret is not configured; refusing to expose an unprotected write endpoint.",
+            statusCode: StatusCodes.Status503ServiceUnavailable);
+    }
+
+    var provided = http.Request.Headers["X-Ingest-Secret"].ToString();
+    if (!CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(provided), Encoding.UTF8.GetBytes(expected)))
+    {
+        return Results.Unauthorized();
+    }
+
+    // Defaults to the most recent weekday. The cron fires after the Indian close, so "today" is
+    // the session that just ended.
+    var target = date ?? DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5.5));
+
+    var day = await reader.ReadDayAsync(target, ct);
+    if (day is null)
+    {
+        // A holiday or weekend. Not an error, and explicitly NOT a sealed empty snapshot.
+        return Results.Ok(new { status = "no-data", date = target, note = "Holiday, weekend, or not yet published." });
+    }
+
+    var result = await job.RunAsync(target, day.Bars, "nse-bhavcopy/1", ct);
+
+    return result.Succeeded
+        ? Results.Ok(new { status = "sealed", date = target, rows = result.RowsWritten, snapshotId = result.SnapshotId })
+        : Results.Problem(detail: result.Error, statusCode: StatusCodes.Status500InternalServerError);
 });
 
 app.Run();

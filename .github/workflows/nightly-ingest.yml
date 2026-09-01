@@ -31,7 +31,7 @@ jobs:
             code=$(curl -sS -o /tmp/out.json -w '%{http_code}' -X POST \
               -H "X-Ingest-Secret: $INGEST_SECRET" \
               --max-time 300 \
-              "$BASE_URL/api/ingest/trigger" || echo "000")
+              "$BASE_URL/api/ingest/run" || echo "000")
 
             if [ "$code" = "200" ] || [ "$code" = "202" ]; then
               echo "Ingestion accepted (HTTP $code)"; cat /tmp/out.json; exit 0
