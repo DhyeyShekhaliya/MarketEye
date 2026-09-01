@@ -104,7 +104,7 @@ MarketEye.sln
 | Frontend | Blazor Server | Fast to build. Know the tradeoff: a persistent circuit per visitor, which is a real hosting cost at scale |
 | Database | **SQL Server** (Developer Edition locally) | Temporal tables + columnstore — see §4 |
 | ORM | EF Core for CRUD/config; **Dapper + SqlBulkCopy for the hot path** | EF is too slow for millions of daily bars |
-| Jobs | Timer-triggered Azure Function (Consumption) calling ingestion logic | Amended: App Service F1 has no Always On, so an in-process `BackgroundService` timer never fires. See `docs/adr/0006` |
+| Jobs | Scheduled GitHub Actions cron calling a protected ingestion endpoint | Amended: App Service F1 has no Always On, so an in-process `BackgroundService` timer never fires. Adds no Azure resource. See `docs/adr/0006` |
 | AI | Azure OpenAI / OpenAI with **strict structured outputs** | Small/cheap tier is plenty — extraction, not reasoning |
 | Cache | `HybridCache` in-memory, two levels — see §5.5 | **No Redis in v1.** Add only when you can name what it fixed |
 | Data source | One provider behind `IMarketDataProvider` (EODHD or FMP) | Alpha Vantage free tier ≈ 25 req/day — unusable for backfill |
@@ -491,8 +491,13 @@ Each phase ends **deployed, tested, and green in CI** before the next begins.
 - [ ] Blazor UI: manual filter controls, results grid
 - [ ] Deployed to Azure
 
-**Exit:** 500+ tickers, 5 years of bars, nightly job unattended for a week, §9 benchmark run and
-recorded. Splits and dividends verified against a hand-checked sample of 20 securities.
+**Exit:** ~~500+ tickers~~ **the full NIFTY 50 universe plus delisted members** (ADR-0005), 5 years
+of bars, nightly job unattended for a week, §9 benchmark run and recorded. Splits and dividends
+verified against a hand-checked sample of 20 securities.
+
+> **Amended.** "500+ tickers" was written for the US S&P 500 universe. The Indian universe decided
+> in ADR-0005 is ~60-80 securities. The §9 benchmark clause is also affected — see `docs/adr/0006`,
+> which records that no valid measurement surface currently exists.
 
 ### Phase 2 — Intent translation (~2–3 weeks)
 - [ ] `MetricConcepts` seeded with ~20 concepts + Strategy Vocabulary screen

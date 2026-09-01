@@ -37,11 +37,19 @@ which matters for §9 measurement but not for correctness.
 nothing: the timer exists only while the process is loaded, and nothing keeps it loaded. Phase 1's
 exit criterion — "nightly job unattended for a week" — is **unachievable** as specified.
 
-### Decision: move the scheduled job out of the web app
+### Decision: an external scheduler pings a protected endpoint
 
-The ingestion trigger moves to a **timer-triggered Azure Function on the Consumption plan** (free
-monthly grant of 1M executions and 400,000 GB-seconds), or equivalently a scheduled GitHub Actions
-workflow calling a protected ingestion endpoint.
+A **scheduled GitHub Actions workflow** calls a protected ingestion endpoint on a cron. The repo
+already exists, the runner minutes are free, and it adds **no Azure resource at all** — which fits
+a portfolio project better than standing up a Function App for one nightly HTTP call.
+
+An Azure Function on the Consumption plan is the alternative if the trigger ever needs to live
+inside Azure. It was the first recommendation here and was downgraded deliberately: it is more
+infrastructure than the problem requires.
+
+Note what this does *not* require: no queue, no worker service, no Hangfire. One cron, one HTTP
+call, and the ingestion runs inside the request. That works precisely because the workload is
+small — see the budget below.
 
 This satisfies §14's rule that infrastructure is added only when something concrete breaks and the
 ADR names what broke. What broke: **F1 has no Always On, so an in-process scheduler never fires.**
@@ -49,12 +57,32 @@ The ingestion *logic* stays in `MarketEye.Ingestion` and remains a plain class; 
 moves. If the app later runs on B1 or higher, the trigger can move back to `BackgroundService`
 without touching the ingestion code.
 
+## Staying inside F1 — the budget this assumes
+
+F1 is workable because the workload is genuinely small. These are the constraints that keep it
+that way; breaking one is the signal to reconsider the tier, not to optimise harder.
+
+| Constraint | Budget |
+|---|---|
+| Universe | ~60-80 securities (NIFTY 50 + delisted members) |
+| Price history | ~100k daily bars total for 5 years — trivially inside 32 GB |
+| Nightly ingest | One bhavcopy file, a few thousand rows, seconds of CPU |
+| Indicators | **Incremental only.** Recomputing all history nightly is what would blow the CPU quota |
+| Logging | Console sink only in production. F1 has ~1 GB of storage and a rolling file sink will eat it |
+| Concurrency | Single-digit concurrent visitors |
+
+The one that matters most is incremental indicators. Everything else has an order of magnitude of
+headroom; a full recompute does not.
+
 ## Blazor Server on F1 — accepted, with eyes open
 
 §3 already flags Blazor Server's cost: one persistent circuit per visitor. F1 is the worst case for
 it — a 20-minute idle unload drops every live circuit, and reconnection after a cold start is
 visible to the user. Acceptable for a portfolio deployment with intermittent traffic. §12 already
 records knowing the WASM alternative as the answer if this becomes a real problem.
+
+Expect a visible cold start — roughly 10-20 seconds — on the first request after an idle period.
+For a project whose audience arrives one reviewer at a time, that is a wart rather than a defect.
 
 ## §9 benchmarks now have no valid surface
 
