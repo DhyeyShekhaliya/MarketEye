@@ -465,18 +465,29 @@ The v1 target `<500ms p95` was unqualified and therefore unreproducible. Define 
 > sealed snapshot containing 5 years of daily bars, warm cache excluded from the measurement,
 > AI parse time excluded, measured server-side over 200 runs.
 
-> **Revision 3 — this definition is currently unmeasurable, and that is recorded rather than
-> quietly dropped (`docs/adr/0005`, `docs/adr/0006`).** Two things broke it:
+> **Revision 3 — status: OUTSTANDING. No benchmark number may be published until this is
+> resolved (`docs/adr/0006`).**
 >
-> 1. **Universe.** The decided universe is NIFTY 50 plus delisted members — roughly 60-80
->    securities, about a tenth of the 500 the definition names.
-> 2. **No valid measurement surface.** Local SQL Server runs emulated on Apple Silicon; App Service
->    F1 is shared infrastructure with a 60 CPU-min/day cap and cold starts; Azure SQL's free tier
->    auto-pauses. None produces numbers that mean anything.
+> **The data is not the problem.** The bhavcopy backfill loaded the whole NSE board — 3,481
+> securities, ~2.5M bars, 2021-09 to 2026-09 — so a 500-security universe over five years is fully
+> available. (An earlier note here claimed the NIFTY 50 universe made §9 unmeasurable. That was
+> wrong: NIFTY 50 is the *screening* universe, not the ingested dataset.)
 >
-> Until one of those is resolved, the README states benchmarks as **outstanding**. The
-> non-negotiables forbid publishing an estimate, and a measured number on an invalid surface is an
-> estimate wearing a lab coat.
+> **The measurement surface is the problem.** All three candidates are invalid:
+>
+> | Surface | Why it fails |
+> |---|---|
+> | Local Docker | SQL Server runs emulated on Apple Silicon — no arm64 image exists |
+> | App Service F1 | Shared infrastructure, 60 CPU-min/day, cold starts; results are scheduling noise |
+> | Azure SQL free | Serverless auto-pause and a vCore-second budget make repeated timed runs unrepresentative |
+>
+> **Therefore the README states benchmarks as outstanding**, and no figure appears anywhere until
+> a valid surface exists. The non-negotiables forbid estimates, and a measured number taken on an
+> invalid surface is an estimate wearing a lab coat.
+>
+> **To close this later**, one of: rent a paid Azure SQL tier for a single recorded run and note the
+> exact SKU beside the numbers; run against a native x86-64 host; or restate the definition for a
+> surface that is actually available and measure honestly against that.
 
 Benchmark suite to record in the README:
 

@@ -96,12 +96,19 @@ bankruptcy. Removing them is survivorship bias, so `Security` rows are never del
 
 ## Benchmarks
 
-Not yet measured. `PLAN.md` §9 defines the benchmark precisely, and the project's own rule is that
-performance numbers in docs are measured or stated as hypotheses — never estimated.
+**Outstanding.** No performance numbers are published, by design.
 
-One constraint worth recording now: there is no arm64 SQL Server image, so the local container runs
-emulated on Apple Silicon. That is fine for correctness work but is **not a valid measurement
-surface**. Benchmark numbers must come off the Azure SQL target.
+`PLAN.md` §9 defines the target precisely — p95 under 500ms for a 10-comparison screen over a
+500-security universe against a sealed snapshot of five years of daily bars. The dataset to run it
+against exists: 3,481 securities and ~2.5M bars are ingested.
+
+What does not exist is a valid place to measure. The local SQL Server runs emulated on Apple
+Silicon (no arm64 image); App Service F1 is shared infrastructure with a 60 CPU-minute daily cap
+and cold starts; and the free Azure SQL tier auto-pauses. Numbers from any of those would describe
+the hardware, not the system.
+
+This project's rule is that performance claims are measured or absent — never estimated. So this
+section stays empty until there is a surface worth measuring on. See `docs/adr/0006`.
 
 ## Layout
 
