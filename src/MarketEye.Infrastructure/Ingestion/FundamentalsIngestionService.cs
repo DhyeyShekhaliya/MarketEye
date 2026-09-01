@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using MarketEye.Application.CorporateActions;
 using MarketEye.Application.Ratios;
 using MarketEye.Domain.Entities;
 using MarketEye.Infrastructure.MarketData.IndianApi;
@@ -87,6 +88,7 @@ public sealed class FundamentalsIngestionService(
                 holder = new JsonDocumentHolder(doc);
 
                 var actions = IndianApiParser.ParseCorporateActions(doc, security.Id);
+                await ResolveRightsFactorsAsync(actions, ct);
                 report.CorporateActionsWritten += await UpsertActionsAsync(actions, ct);
 
                 var fundamentals = IndianApiParser.ParseFundamentals(doc, security.Id);
@@ -198,6 +200,49 @@ public sealed class FundamentalsIngestionService(
             db.ChangeTracker.Clear();
         }
         return written;
+    }
+
+    /// <summary>
+    /// Computes adjustment factors for rights issues (§4.4, ADR-0004).
+    ///
+    /// Rights cannot be resolved at parse time: dilution depends on the theoretical ex-rights
+    /// price, which needs the CUM-RIGHTS market close as well as the ratio and subscription price.
+    /// The remark supplies the first two; the price series supplies the third.
+    ///
+    /// Left null when the cum-rights close is unavailable. PriceAdjuster skips a null factor, so
+    /// the series keeps a visible step rather than gaining a fabricated adjustment.
+    /// </summary>
+    private async Task ResolveRightsFactorsAsync(List<CorporateAction> actions, CancellationToken ct)
+    {
+        foreach (var action in actions.Where(a => a.ActionType == CorporateActionType.Rights
+                                              && a.AdjustmentFactor is null))
+        {
+            var terms = CorporateActionRatioParser.RightsTerms(action.RawDescription);
+            if (terms?.SubscriptionPrice is not { } subscription) continue;
+
+            // Cum-rights: the last close STRICTLY BEFORE the ex-date. Using the ex-date's own close
+            // would be circular -- that price already reflects the dilution being computed.
+            var cumRights = await db.PriceBars
+                .Where(b => b.SecurityId == action.SecurityId && b.Date < action.EffectiveDate)
+                .OrderByDescending(b => b.Date)
+                .Select(b => (decimal?)b.Close)
+                .FirstOrDefaultAsync(ct);
+
+            if (cumRights is not > 0) continue;
+
+            // A rights issue priced ABOVE the market is not dilutive and would give a factor > 1,
+            // which would inflate historical prices. Rare, usually a data error, and refused.
+            if (subscription >= cumRights.Value) continue;
+
+            action.AdjustmentFactor = AdjustmentFactors.ForRights(
+                terms.Offered, terms.Held, subscription, cumRights.Value);
+
+            logger.LogInformation(
+                "Rights factor for security {Id} on {Date}: {Factor} (ratio {Offered}:{Held}, " +
+                "subscription {Sub}, cum-rights {Cum})",
+                action.SecurityId, action.EffectiveDate, action.AdjustmentFactor,
+                terms.Offered, terms.Held, subscription, cumRights);
+        }
     }
 
     /// <summary>

@@ -548,7 +548,13 @@ verified against a hand-checked sample of 20 securities.
 > | 5 years of bars | Met **locally** (~2.5M bars, 2021-09 → 2026-09). Azure holds 1 year by choice, above |
 > | Nightly job unattended | **Run locally**, one year / ~250 sessions ingested without intervention. NOT met on Azure: the deployed cron returns 500, most likely NSE refusing a datacentre IP |
 > | §9 benchmark | **Dropped by decision** — no valid measurement surface exists (`docs/adr/0006`), and the non-negotiables forbid publishing an estimate. Recorded as outstanding in the README rather than faked |
-> | Splits/dividends verified, 20 securities | Automated as `GET /api/reconcile/corporate-actions` — compares each stored adjustment factor against the price step the market actually made |
+> | Splits/dividends verified, 20 securities | **Partially met.** Automated as `GET /api/reconcile/corporate-actions`. It found and fixed four real defects (see below), and RELIANCE's 1:1 bonus verified cleanly against the market's own repricing. But the deployed one-year window contains almost no checkable splits or bonuses — 88 of 90 actions fall outside it — so the 20-security bar is not met on Azure. It IS satisfiable against the local five-year dataset once corporate actions are ingested there |
+>
+> **What the reconciliation caught**, all fixed: `"Re."` never parsed, so every split to one rupee
+> was silently skipped; comparison bars months apart produced confident nonsense (a dividend with
+> an implied factor of 2.27); actions sharing an ex-date were each compared against a step caused
+> by all of them; and rights subscription price was read as the premium alone rather than face
+> value plus premium, which overstates dilution.
 
 > **Amended.** "500+ tickers" was written for the US S&P 500 universe. The Indian universe decided
 > in ADR-0005 is ~60-80 securities. The §9 benchmark clause is also affected — see `docs/adr/0006`,

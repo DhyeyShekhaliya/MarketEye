@@ -101,12 +101,36 @@ public class RatioParserTests
         // Rights dilution needs the cum-rights market price, which is not in the remark. The
         // parser returns terms only; AdjustmentFactors.ForRights computes the factor.
         var terms = CorporateActionRatioParser.RightsTerms(
-            "Rights issue in the ratio of 1:5 at Rs. 250 per share");
+            "Rights issue in the ratio of 1:5 at premium of Rs. 250");
 
         terms.Should().NotBeNull();
         terms!.Offered.Should().Be(1m);
         terms.Held.Should().Be(5m);
-        terms.SubscriptionPrice.Should().Be(250m);
+        terms.SubscriptionPrice.Should().Be(250m, "no face value stated, so the premium is all we have");
+    }
+
+    [Fact]
+    public void The_rights_subscription_price_is_face_value_plus_premium()
+    {
+        // Indian rights are quoted as "shares of Rs. 10/- ... @ premium of Rs. 290/-".
+        // The subscription price is 300, not 290. Taking the premium alone understates the price
+        // and therefore OVERSTATES the dilution -- adjusting historical prices too far down.
+        var terms = CorporateActionRatioParser.RightsTerms(
+            "Rights issue of equity shares of Rs. 10/- in the ratio of 1:2 @ premium of Rs. 290/-.");
+
+        terms.Should().NotBeNull();
+        terms!.Offered.Should().Be(1m);
+        terms.Held.Should().Be(2m);
+        terms.SubscriptionPrice.Should().Be(300m, "face value 10 plus premium 290");
+    }
+
+    [Fact]
+    public void Rights_issued_at_par_use_the_face_value_alone()
+    {
+        var terms = CorporateActionRatioParser.RightsTerms(
+            "Rights issue of equity shares of Rs. 10/- in the ratio of 1:5");
+
+        terms!.SubscriptionPrice.Should().Be(10m);
     }
 
     [Fact]

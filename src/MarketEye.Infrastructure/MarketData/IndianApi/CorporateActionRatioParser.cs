@@ -73,11 +73,26 @@ public static partial class CorporateActionRatioParser
             return null;
         if (offered <= 0 || held <= 0) return null;
 
-        decimal? price = null;
-        var p = PricePattern().Match(remarks);
-        if (p.Success && TryDec(p.Groups["price"].Value, out var parsed)) price = parsed;
+        // Indian rights are quoted as "equity shares of Rs. 10/- ... @ premium of Rs. 290/-".
+        // The SUBSCRIPTION PRICE is face value PLUS premium (300 here), not the premium alone.
+        // Taking the premium as the price understates it and therefore overstates the dilution.
+        decimal? face = null;
+        var f = FaceValuePattern2().Match(remarks);
+        if (f.Success && TryDec(f.Groups["face"].Value, out var parsedFace)) face = parsedFace;
 
-        return new RightsTerms(offered, held, price);
+        decimal? premium = null;
+        var p = PremiumPattern().Match(remarks);
+        if (p.Success && TryDec(p.Groups["price"].Value, out var parsedPremium)) premium = parsedPremium;
+
+        decimal? subscription = (face, premium) switch
+        {
+            ({ } fv, { } pr) => fv + pr,
+            (null, { } pr) => pr,          // premium only: the best available reading
+            ({ } fv, null) => fv,          // issued at par
+            _ => null,
+        };
+
+        return new RightsTerms(offered, held, subscription);
     }
 
     private static bool TryDec(string s, out decimal value) =>
@@ -97,8 +112,13 @@ public static partial class CorporateActionRatioParser
         RegexOptions.IgnoreCase)]
     private static partial Regex FaceValuePattern();
 
-    [GeneratedRegex(@"(?:at|premium\s+of)\s+(?:r[se]\.?\s*)?(?<price>\d+(?:\.\d+)?)", RegexOptions.IgnoreCase)]
-    private static partial Regex PricePattern();
+    // "premium of Rs. 290/-" — the amount ABOVE face value.
+    [GeneratedRegex(@"premium\s+of\s+(?:r[se]\.?\s*)?(?<price>\d+(?:\.\d+)?)", RegexOptions.IgnoreCase)]
+    private static partial Regex PremiumPattern();
+
+    // "equity shares of Rs. 10/-" — the face value the premium sits on top of.
+    [GeneratedRegex(@"shares?\s+of\s+(?:r[se]\.?\s*)?(?<face>\d+(?:\.\d+)?)", RegexOptions.IgnoreCase)]
+    private static partial Regex FaceValuePattern2();
 }
 
 /// <summary>Ratio terms for a rights issue. The factor still needs the cum-rights market price.</summary>
