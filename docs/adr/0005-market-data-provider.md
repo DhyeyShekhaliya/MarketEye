@@ -238,3 +238,25 @@ Two ways to close the gap later, in order of effort:
 §12's 20-security reconciliation should sample real announcement dates against these estimates and
 record the observed error distribution. If actual filings cluster well inside the deadline, the
 estimate is conservative by more than necessary and can be tightened with evidence.
+
+
+## Annual statements only
+
+The provider returns Annual and Interim statements in one `financials` array, and they share
+period-end dates — an FY ending 2026-03-31 and a Q4 ending 2026-03-31 both appear. §4.1 keys
+`Fundamentals` on `(SecurityId, FiscalPeriodEnd)`, so the two collide. The first live run failed on
+exactly that.
+
+Only **annual** statements are ingested. Deduplicating instead would have fixed the crash and left
+a worse problem: annual and quarterly figures in one undifferentiated table means a screen can
+compare one company's annual revenue against another's quarterly. That is the same incomparability
+ADR-0004 raises for standalone vs consolidated accounts, and unlike a crash it is invisible in the
+results.
+
+**Cost, stated plainly:** fundamentals can be up to roughly **15 months stale** — a fiscal year end
+plus the filing lag plus the wait for the next year end. A screen for "profitable" is therefore
+answering "was profitable in the last reported financial year", not "is profitable now".
+
+Adding quarterly data requires a period-type column so the two can never be mixed, plus a decision
+about which basis a given concept means. That is a schema change and a vocabulary decision (§5.2),
+not a parser tweak.

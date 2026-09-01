@@ -103,12 +103,33 @@ public static class IndianApiParser
             return result;
         }
 
+        // ANNUAL STATEMENTS ONLY, and that is a modelling decision rather than a shortcut.
+        //
+        // The provider returns Annual and Interim statements in one array, and they share
+        // period-end dates -- an FY ending 2026-03-31 and a Q4 ending 2026-03-31 both appear.
+        // §4.1's key is (SecurityId, FiscalPeriodEnd), so they collide.
+        //
+        // Deduplicating would fix the crash and leave a worse problem: annual and quarterly
+        // figures in one undifferentiated table means a screen can compare ONE company's annual
+        // revenue against ANOTHER's quarterly. That is the same incomparability ADR-0004 raises
+        // for standalone vs consolidated accounts, and it is invisible in the results.
+        //
+        // Cost, recorded honestly: fundamentals can be up to ~15 months stale (FY end plus filing
+        // lag). Adding quarterly needs a period-type column so the two are never mixed -- a schema
+        // change, not a parser tweak.
+        var seenPeriodEnds = new HashSet<DateOnly>();
+
         foreach (var statement in financials.EnumerateArray())
         {
+            if (!ReportingLag.IsAnnual(Str(statement, "Type"))) continue;
+
             var endDate = FirstDate(statement, "EndDate");
             if (endDate is null) continue;
 
-            var isAnnual = ReportingLag.IsAnnual(Str(statement, "Type"));
+            // Defensive: a provider that repeats an annual period would otherwise still collide.
+            if (!seenPeriodEnds.Add(endDate.Value)) continue;
+
+            const bool isAnnual = true;
 
             if (!statement.TryGetProperty("stockFinancialMap", out var map)
                 || map.ValueKind != JsonValueKind.Object)

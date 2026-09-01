@@ -44,16 +44,13 @@ public sealed class FundamentalsIngestionService(
         // spend the quota on unchanged data (ADR-0005).
         var query = db.Securities.Where(s => s.IsActive);
 
-        if (symbols is { Count: > 0 })
-        {
-            query = query.Where(s => symbols.Contains(s.Ticker));
-        }
-        else
-        {
-            query = query
+        // Ordered in both branches: Take without OrderBy gives an unpredictable set, which in a
+        // quota-limited run means a different arbitrary slice each night.
+        query = symbols is { Count: > 0 }
+            ? query.Where(s => symbols.Contains(s.Ticker)).OrderBy(s => s.Ticker)
+            : query
                 .OrderBy(s => db.Fundamentals.Any(f => f.SecurityId == s.Id) ? 1 : 0)
                 .ThenBy(s => s.Ticker);
-        }
 
         var securities = await query
             .Take(take)
