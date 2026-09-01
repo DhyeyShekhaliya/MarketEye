@@ -614,8 +614,12 @@ moved to Phase 2 · realistic timeline (§10) · backfill and licensing risks (�
 - **Numeric quality scores for this plan.** Not a measurement. Ignored.
 
 ### Still open
-- [ ] Market coverage — US-only recommended for v1.
-- [ ] Universe for v1 — S&P 500 **plus its delisted historical members**; keeps backfill inside
-      budget while staying survivorship-correct.
+- [x] Market coverage — **RESOLVED: Indian equities (NSE/BSE)**, overriding the US-only
+      recommendation. See `docs/adr/0004`, which records seven consequences the US-shaped plan did
+      not anticipate — bonus/rights issues, circuit limits vs. T+1 fills, India-calibrated costs,
+      the NIFTY benchmark, cross-exchange identity, standalone vs. consolidated fundamentals, and
+      firmer licensing.
+- [ ] Universe for v1 — was "S&P 500 plus delisted members". The Indian equivalent (NIFTY 500 plus
+      delisted members) depends on which provider can supply delisted history. See `docs/adr/0005`.
 - [ ] Auth — ASP.NET Core Identity (simpler, sufficient) vs. Entra ID.
 - [ ] Multi-user from Phase 2, or single-user until Phase 4?
