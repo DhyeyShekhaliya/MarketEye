@@ -32,6 +32,20 @@ public sealed class CorporateActionReconciler(string connectionString)
     /// </summary>
     public const decimal ToleranceFraction = 0.05m;
 
+    /// <summary>
+    /// How far a comparison bar may sit from the ex-date.
+    ///
+    /// Without this the "previous session" lookup happily returns a bar from a year earlier when
+    /// the action predates the ingested window — and then reports a confident implied factor that
+    /// is really twelve months of ordinary price movement. The first run produced exactly that: a
+    /// dividend with an implied factor of 2.27, and three different RELIANCE actions all showing
+    /// the same 2583.30 -> 1353.90 pair.
+    ///
+    /// A reconciliation that manufactures plausible-looking noise is worse than one that reports
+    /// nothing, because the noise gets investigated.
+    /// </summary>
+    public const int MaxBarDistanceDays = 10;
+
     public async Task<ReconciliationReport> RunAsync(int maxSecurities, CancellationToken ct)
     {
         await using var conn = new SqlConnection(connectionString);
@@ -46,21 +60,35 @@ public sealed class CorporateActionReconciler(string connectionString)
                 ca.AdjustmentFactor, ca.DividendAmount, ca.RawDescription,
                 (SELECT TOP 1 pb.[Close] FROM dbo.PriceBars pb
                   WHERE pb.SecurityId = s.Id AND pb.Date >= ca.EffectiveDate
+                    AND pb.Date <= DATEADD(day, @window, ca.EffectiveDate)
                   ORDER BY pb.Date ASC) AS CloseOnOrAfter,
                 (SELECT TOP 1 pb.[Close] FROM dbo.PriceBars pb
                   WHERE pb.SecurityId = s.Id AND pb.Date < ca.EffectiveDate
+                    AND pb.Date >= DATEADD(day, -@window, ca.EffectiveDate)
                   ORDER BY pb.Date DESC) AS CloseBefore,
                 (SELECT TOP 1 pb.AdjClose FROM dbo.PriceBars pb
                   WHERE pb.SecurityId = s.Id AND pb.Date >= ca.EffectiveDate
+                    AND pb.Date <= DATEADD(day, @window, ca.EffectiveDate)
                   ORDER BY pb.Date ASC) AS AdjOnOrAfter,
                 (SELECT TOP 1 pb.AdjClose FROM dbo.PriceBars pb
                   WHERE pb.SecurityId = s.Id AND pb.Date < ca.EffectiveDate
-                  ORDER BY pb.Date DESC) AS AdjBefore
+                    AND pb.Date >= DATEADD(day, -@window, ca.EffectiveDate)
+                  ORDER BY pb.Date DESC) AS AdjBefore,
+                -- Actions sharing an ex-date produce ONE price step between them. Comparing any
+                -- single factor against that step is wrong by construction: 360ONE had a 1:1 bonus
+                -- AND a Rs.2 -> Re.1 split on 2023-03-02, so the step reflects both.
+                (SELECT COUNT(*) FROM dbo.CorporateActions x
+                  WHERE x.SecurityId = ca.SecurityId AND x.EffectiveDate = ca.EffectiveDate
+                    AND x.ActionType IN ('Split','Bonus','Rights')) AS PriceActionsOnDate,
+                (SELECT EXP(SUM(LOG(x.AdjustmentFactor))) FROM dbo.CorporateActions x
+                  WHERE x.SecurityId = ca.SecurityId AND x.EffectiveDate = ca.EffectiveDate
+                    AND x.ActionType IN ('Split','Bonus','Rights')
+                    AND x.AdjustmentFactor > 0) AS CombinedFactorOnDate
             FROM dbo.CorporateActions ca
             JOIN dbo.Securities s ON s.Id = ca.SecurityId
             WHERE ca.ActionType IN ('Split', 'Bonus', 'Rights', 'Dividend')
             ORDER BY ca.EffectiveDate DESC;
-            """, new { take = maxSecurities * 5 }, cancellationToken: ct))).ToList();
+            """, new { take = maxSecurities * 5, window = MaxBarDistanceDays }, cancellationToken: ct))).ToList();
 
         var report = new ReconciliationReport();
 
@@ -88,7 +116,15 @@ public sealed class CorporateActionReconciler(string connectionString)
                 RawCloseAfter = r.CloseOnOrAfter,
             };
 
-            if (r.AdjustmentFactor is { } stored && stored > 0)
+            // Compare against the COMBINED factor for the date when several actions share it.
+            var comparisonFactor = r.PriceActionsOnDate > 1
+                ? r.CombinedFactorOnDate
+                : r.AdjustmentFactor;
+
+            check.ActionsSharingDate = r.PriceActionsOnDate;
+            check.ComparisonFactor = comparisonFactor is null ? null : Math.Round(comparisonFactor.Value, 4);
+
+            if (comparisonFactor is { } stored && stored > 0)
             {
                 var deviation = Math.Abs(implied - stored) / stored;
                 check.DeviationFraction = Math.Round(deviation, 4);
@@ -129,7 +165,8 @@ public sealed class CorporateActionReconciler(string connectionString)
     private sealed record ActionRow(
         int SecurityId, string Ticker, DateOnly EffectiveDate, string ActionType,
         decimal? AdjustmentFactor, decimal? DividendAmount, string? RawDescription,
-        decimal? CloseOnOrAfter, decimal? CloseBefore, decimal? AdjOnOrAfter, decimal? AdjBefore);
+        decimal? CloseOnOrAfter, decimal? CloseBefore, decimal? AdjOnOrAfter, decimal? AdjBefore,
+        int PriceActionsOnDate, decimal? CombinedFactorOnDate);
 }
 
 public enum ReconciliationStatus
@@ -150,6 +187,13 @@ public sealed class ActionCheck
     public DateOnly EffectiveDate { get; init; }
     public required string ActionType { get; init; }
     public decimal? StoredFactor { get; init; }
+
+    /// <summary>Number of price-affecting actions sharing this ex-date. More than one means the
+    /// price step reflects all of them combined.</summary>
+    public int ActionsSharingDate { get; set; }
+
+    /// <summary>The factor actually compared: the stored one, or the product when several share a date.</summary>
+    public decimal? ComparisonFactor { get; set; }
     public decimal? ImpliedFactor { get; init; }
     public decimal? DeviationFraction { get; set; }
     public decimal? AdjustedSeriesStep { get; set; }

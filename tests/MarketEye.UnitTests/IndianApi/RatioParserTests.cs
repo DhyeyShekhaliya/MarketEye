@@ -42,6 +42,20 @@ public class RatioParserTests
             .Should().BeApproximately((decimal)expected, 0.0001m);
     }
 
+    [Theory]
+    [InlineData("Stock split from Rs. 2/- to Re. 1/-.", 0.5)]
+    [InlineData("Face value split from Rs.10/- to Re.1/-", 0.1)]
+    [InlineData("Split from Re. 1 to Rs. 2", 2.0)]
+    public void Re_is_accepted_as_well_as_Rs(string remarks, double expected)
+    {
+        // Found by the §12 reconciliation: 360ONE's "from Rs. 2/- to Re. 1/-" parsed to null
+        // because the pattern only matched "Rs". "Re." is the Indian singular and appears in
+        // essentially every split TO one rupee, so this silently skipped a whole class of splits
+        // and left a real step in the adjusted series.
+        CorporateActionRatioParser.SplitFactor(remarks)!.Value
+            .Should().BeApproximately((decimal)expected, 0.0001m);
+    }
+
     [Fact]
     public void A_split_remark_is_not_read_as_a_share_ratio()
     {

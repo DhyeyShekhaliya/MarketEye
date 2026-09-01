@@ -90,11 +90,14 @@ public static partial class CorporateActionRatioParser
     private static partial Regex RatioPattern();
 
     // "from Rs. 10 to Rs. 5", "from Rs10/- to Rs2/-"
-    [GeneratedRegex(@"from\s+(?:rs\.?\s*)?(?<from>\d+(?:\.\d+)?)\s*(?:/-)?\s*to\s+(?:rs\.?\s*)?(?<to>\d+(?:\.\d+)?)",
+    // "Re." is the Indian singular of "Rs." and appears in essentially every split TO one rupee:
+    // "from Rs. 2/- to Re. 1/-". Matching only "Rs" silently failed those, leaving the split
+    // unadjusted and a real step in the price series.
+    [GeneratedRegex(@"from\s+(?:r[se]\.?\s*)?(?<from>\d+(?:\.\d+)?)\s*(?:/-)?\s*to\s+(?:r[se]\.?\s*)?(?<to>\d+(?:\.\d+)?)",
         RegexOptions.IgnoreCase)]
     private static partial Regex FaceValuePattern();
 
-    [GeneratedRegex(@"(?:at|premium\s+of)\s+(?:rs\.?\s*)?(?<price>\d+(?:\.\d+)?)", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"(?:at|premium\s+of)\s+(?:r[se]\.?\s*)?(?<price>\d+(?:\.\d+)?)", RegexOptions.IgnoreCase)]
     private static partial Regex PricePattern();
 }
 
