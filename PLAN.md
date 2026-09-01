@@ -544,6 +544,16 @@ verified against a hand-checked sample of 20 securities.
 > **Amended.** "500+ tickers" was written for the US S&P 500 universe. The Indian universe decided
 > in ADR-0005 is ~60-80 securities. The §9 benchmark clause is also affected — see `docs/adr/0006`,
 > which records that no valid measurement surface currently exists.
+>
+> **Amended again — the deployed environment holds 1 year, not 5.** The full five years
+> (2021-09 → 2026-09, ~2.5M bars, 3,481 securities) exists in the local database and is what
+> correctness work runs against. Azure holds **one year** instead, because the free tier's
+> 100,000 vCore-seconds per month is roughly 28 hours of compute and a five-year backfill over the
+> internet would consume a large share of it in a single run.
+>
+> This is a deliberate split, not a shortfall to fix later: the full history lives where it is
+> cheap and the deployment carries enough to demonstrate the product. A reader who wants the
+> five-year claim should see it here rather than infer it from the deployed data.
 
 ### Phase 2 — Intent translation (~2–3 weeks)
 - [ ] `MetricConcepts` seeded with ~20 concepts + Strategy Vocabulary screen
