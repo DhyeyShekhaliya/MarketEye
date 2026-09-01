@@ -36,6 +36,9 @@ public static class InfrastructureServiceCollectionExtensions
 
         services.AddSingleton(new PriceBarBulkWriter(cs));
         services.AddSingleton<BhavcopyParser>();
+        services.AddSingleton(new IndicatorBulkWriter(cs));
+        services.AddSingleton<IsinResolver>();
+        services.AddScoped<BackfillService>();
 
         // NSE rejects plain HTTP clients. A cookie container is mandatory (the archive endpoints
         // require session cookies from the homepage) and so is a browser-like User-Agent.

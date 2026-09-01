@@ -35,6 +35,17 @@ public sealed class BhavcopyParser
     private static readonly string[] UdiffHeaders =
         ["TckrSymb", "SctySrs", "OpnPric", "HghPric", "LwPric", "ClsPric", "PrvsClsgPric", "TtlTradgVol", "TradDt", "ISIN"];
 
+    /// <summary>
+    /// NSE's "security-wise full bhavdata" layout, which is what public archives carry for recent
+    /// years. It is the only layout available from mid-2021 onward in most mirrors.
+    ///
+    /// Critically it carries NO ISIN column, so securities ingested from it cannot be keyed on a
+    /// provider-stable identifier the way §4.4 wants. See IsinResolver for how that is handled.
+    /// Fields are also space-padded after each comma.
+    /// </summary>
+    private static readonly string[] FullBhavHeaders =
+        ["SYMBOL", "SERIES", "OPEN_PRICE", "HIGH_PRICE", "LOW_PRICE", "CLOSE_PRICE", "PREV_CLOSE", "TTL_TRD_QNTY", "DATE1"];
+
     /// <summary>Parses the whole file, skipping non-equity series and unparseable rows.</summary>
     public IReadOnlyList<BhavcopyRow> Parse(TextReader reader)
     {
@@ -55,7 +66,7 @@ public sealed class BhavcopyParser
             var f = SplitCsv(line);
             if (f.Length < headers.Length) continue;
 
-            var series = Get(f, map.Series);
+            var series = Get(f, map.Series).Trim();
             if (!EquitySeries.Contains(series)) continue;
 
             if (!TryDecimal(Get(f, map.Open), out var open) ||
@@ -103,6 +114,16 @@ public sealed class BhavcopyParser
                     idx[set[5]], idx[set[6]], idx[set[7]], idx[set[8]], idx[set[9]]);
             }
         }
+
+        // sec_bhavdata_full: same fields, no ISIN. Isin is mapped to -1 so Get() yields empty
+        // rather than throwing, and the caller resolves identity another way.
+        if (FullBhavHeaders.All(idx.ContainsKey))
+        {
+            return new ColumnMap(
+                idx["SYMBOL"], idx["SERIES"], idx["OPEN_PRICE"], idx["HIGH_PRICE"],
+                idx["LOW_PRICE"], idx["CLOSE_PRICE"], idx["PREV_CLOSE"], idx["TTL_TRD_QNTY"],
+                idx["DATE1"], Isin: -1);
+        }
         return null;
     }
 
@@ -113,7 +134,7 @@ public sealed class BhavcopyParser
         decimal.TryParse(s.Trim(), NumberStyles.Any, CultureInfo.InvariantCulture, out value);
 
     private static readonly string[] DateFormats =
-        ["dd-MMM-yyyy", "yyyy-MM-dd", "dd-MM-yyyy", "dd/MM/yyyy", "yyyyMMdd"];
+        ["dd-MMM-yyyy", "yyyy-MM-dd", "dd-MM-yyyy", "dd/MM/yyyy", "yyyyMMdd", "dd-MMM-yy"];
 
     private static bool TryDate(string s, out DateOnly date)
     {

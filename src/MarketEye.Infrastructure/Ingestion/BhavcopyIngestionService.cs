@@ -18,6 +18,7 @@ public sealed class BhavcopyIngestionService(
     MarketEyeDbContext db,
     IBhavcopySource source,
     BhavcopyParser parser,
+    IsinResolver isins,
     ILogger<BhavcopyIngestionService> logger)
 {
     /// <summary>
@@ -42,7 +43,7 @@ public sealed class BhavcopyIngestionService(
         var bars = new List<PriceBar>(rows.Count);
         foreach (var r in rows)
         {
-            if (!securityIds.TryGetValue(r.Isin, out var securityId)) continue;
+            if (!securityIds.TryGetValue(isins.Resolve(r), out var securityId)) continue;
 
             bars.Add(new PriceBar
             {
@@ -88,24 +89,27 @@ public sealed class BhavcopyIngestionService(
     private async Task<Dictionary<string, int>> ReconcileSecuritiesAsync(
         IReadOnlyList<BhavcopyRow> rows, DateOnly date, CancellationToken ct)
     {
-        var isins = rows.Select(r => r.Isin).Where(i => i.Length > 0).Distinct().ToList();
+        // Identity comes from the resolver, not the row: the sec_bhavdata_full layout carries no
+        // ISIN, so an ISIN-only path silently produces zero securities and zero bars (§4.4).
+        var ids = rows.Select(r => isins.Resolve(r)).Distinct().ToList();
 
         var existing = await db.Securities
-            .Where(s => isins.Contains(s.ProviderSecurityId))
+            .Where(s => ids.Contains(s.ProviderSecurityId))
             .ToDictionaryAsync(s => s.ProviderSecurityId, ct);
 
         foreach (var r in rows)
         {
-            if (r.Isin.Length == 0) continue;
+            var providerId = isins.Resolve(r);
+            if (providerId.Length == 0) continue;
 
-            if (existing.TryGetValue(r.Isin, out var security))
+            if (existing.TryGetValue(providerId, out var security))
             {
                 if (!string.Equals(security.Ticker, r.Symbol, StringComparison.Ordinal))
                 {
                     // §4.4: same company, new symbol. One row, plus an auditable record of when
                     // it changed -- otherwise a five-year price series silently splits in two.
                     logger.LogInformation(
-                        "Ticker change on {Isin}: {Old} -> {New}", r.Isin, security.Ticker, r.Symbol);
+                        "Ticker change on {Id}: {Old} -> {New}", providerId, security.Ticker, r.Symbol);
 
                     db.CorporateActions.Add(new CorporateAction
                     {
@@ -134,7 +138,7 @@ public sealed class BhavcopyIngestionService(
             var created = new Security
             {
                 Ticker = r.Symbol,
-                ProviderSecurityId = r.Isin,
+                ProviderSecurityId = providerId,
                 // The bhavcopy carries no company name. Populated later from the fundamentals
                 // provider; the ticker is a usable placeholder and beats inventing one.
                 Name = r.Symbol,
@@ -142,7 +146,7 @@ public sealed class BhavcopyIngestionService(
                 IsActive = true,
             };
             db.Securities.Add(created);
-            existing[r.Isin] = created;
+            existing[providerId] = created;
         }
 
         await db.SaveChangesAsync(ct);

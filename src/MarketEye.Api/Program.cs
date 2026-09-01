@@ -175,6 +175,32 @@ app.MapPost("/api/ingest/run", async (
         : Results.Problem(detail: result.Error, statusCode: StatusCodes.Status500InternalServerError);
 });
 
+// Backfill. Separate from the nightly endpoint because it uses the two-pass strategy: bars
+// bulk-loaded first, indicators derived once at the end. Running the nightly path 1,250 times is
+// O(days squared) and does not finish.
+app.MapPost("/api/ingest/backfill", async (
+    HttpContext http,
+    IConfiguration config,
+    BackfillService backfill,
+    DateOnly from,
+    DateOnly to,
+    CancellationToken ct) =>
+{
+    var expected = config["Ingestion:TriggerSecret"];
+    if (string.IsNullOrWhiteSpace(expected)) return Results.Problem(
+        detail: "Ingestion:TriggerSecret is not configured.", statusCode: 503);
+
+    var provided = http.Request.Headers["X-Ingest-Secret"].ToString();
+    if (!CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(provided), Encoding.UTF8.GetBytes(expected)))
+    {
+        return Results.Unauthorized();
+    }
+
+    var report = await backfill.RunAsync(from, to, ct);
+    return Results.Ok(report);
+});
+
 app.Run();
 
 /// <summary>Request body for POST /api/screen.</summary>

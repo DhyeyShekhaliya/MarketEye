@@ -174,9 +174,12 @@ public class MarketEyeDbContext(DbContextOptions<MarketEyeDbContext> options) : 
             e.Property(x => x.AllowedOperatorsCsv).HasMaxLength(256).IsRequired();
             e.Property(x => x.Source).HasConversion<string>().HasMaxLength(24);
             e.Property(x => x.DefaultOperator).HasConversion<string>().HasMaxLength(24);
-            e.Property(x => x.MinValue).HasPrecision(18, 6);
-            e.Property(x => x.MaxValue).HasPrecision(18, 6);
-            e.Property(x => x.DefaultThreshold).HasPrecision(18, 6);
+            // Wide enough for Indian market caps in rupees: a large-cap is ~2e13, and
+            // decimal(18,6) leaves only 12 integer digits. Range bounds are compared against
+            // values from any concept, so they must span the widest of them.
+            e.Property(x => x.MinValue).HasPrecision(28, 6);
+            e.Property(x => x.MaxValue).HasPrecision(28, 6);
+            e.Property(x => x.DefaultThreshold).HasPrecision(28, 6);
 
             // The validator matches ordinally; a case-insensitive duplicate would make which row
             // wins depend on collation.
