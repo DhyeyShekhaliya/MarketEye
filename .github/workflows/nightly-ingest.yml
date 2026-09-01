@@ -37,7 +37,10 @@ jobs:
               echo "Ingestion accepted (HTTP $code)"; cat /tmp/out.json; exit 0
             fi
 
-            echo "Attempt $attempt failed with HTTP $code"; cat /tmp/out.json 2>/dev/null || true
+            echo "Attempt $attempt failed with HTTP $code"
+            echo "--- response body ---"
+            cat /tmp/out.json 2>/dev/null || echo "(empty)"
+            echo
             sleep 30
           done
 

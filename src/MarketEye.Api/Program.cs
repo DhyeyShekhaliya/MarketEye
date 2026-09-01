@@ -219,18 +219,40 @@ app.MapPost("/api/ingest/run", async (
     // the session that just ended.
     var target = date ?? DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5.5));
 
-    var day = await reader.ReadDayAsync(target, ct);
-    if (day is null)
+    // Everything is inside the try. The fetch was previously outside it, so any failure reaching
+    // NSE surfaced as a bare 500 with no body -- the cron reported "HTTP 500" three times and the
+    // reason lived only in server logs.
+    try
     {
-        // A holiday or weekend. Not an error, and explicitly NOT a sealed empty snapshot.
-        return Results.Ok(new { status = "no-data", date = target, note = "Holiday, weekend, or not yet published." });
+        var day = await reader.ReadDayAsync(target, ct);
+        if (day is null)
+        {
+            // A holiday or weekend. Not an error, and explicitly NOT a sealed empty snapshot.
+            return Results.Ok(new { status = "no-data", date = target, note = "Holiday, weekend, or not yet published." });
+        }
+
+        var result = await job.RunAsync(target, day.Bars, "nse-bhavcopy/1", ct);
+
+        return result.Succeeded
+            ? Results.Ok(new { status = "sealed", date = target, rows = result.RowsWritten, snapshotId = result.SnapshotId })
+            : Results.Problem(detail: result.Error, statusCode: StatusCodes.Status500InternalServerError);
     }
-
-    var result = await job.RunAsync(target, day.Bars, "nse-bhavcopy/1", ct);
-
-    return result.Succeeded
-        ? Results.Ok(new { status = "sealed", date = target, rows = result.RowsWritten, snapshotId = result.SnapshotId })
-        : Results.Problem(detail: result.Error, statusCode: StatusCodes.Status500InternalServerError);
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Ingestion failed",
+            detail: $"{ex.GetType().Name}: {ex.Message}" +
+                    (ex.InnerException is { } inner ? $" -> {inner.GetType().Name}: {inner.Message}" : ""),
+            statusCode: StatusCodes.Status500InternalServerError,
+            extensions: new Dictionary<string, object?>
+            {
+                ["date"] = target.ToString("yyyy-MM-dd"),
+                // Distinguishes the two sources: unset means it went to NSE directly, which is
+                // where a datacentre IP is most likely to be refused.
+                ["source"] = string.IsNullOrWhiteSpace(config["Ingestion:ArchivePath"])
+                    ? "nse-direct" : "local-archive",
+            });
+    }
 });
 
 // Backfill. Separate from the nightly endpoint because it uses the two-pass strategy: bars
