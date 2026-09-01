@@ -45,10 +45,33 @@ if (app.Environment.IsDevelopment())
     // Dev convenience only. Production (Azure) must apply migrations out of band via
     // 'dotnet ef database update' or a migration bundle: migrating on startup races
     // across scaled-out instances and gives no rollback path.
+    // Migrations stay Development-only. Production applies them out of band, because startup
+    // migration races across scaled-out instances and offers no rollback (docs/adr/0006).
     using var scope = app.Services.CreateScope();
-    var db = scope.ServiceProvider.GetRequiredService<MarketEyeDbContext>();
-    await db.Database.MigrateAsync();
-    await MetricConceptSeed.SeedAsync(db, CancellationToken.None);
+    await scope.ServiceProvider.GetRequiredService<MarketEyeDbContext>().Database.MigrateAsync();
+}
+
+// The vocabulary seeds in EVERY environment, unlike migrations.
+//
+// §5.2 makes MetricConcepts reference data, not test fixtures, and §5.1 fails closed on unknown
+// concepts -- so an empty table does not degrade the app, it disables it: the validator rejects
+// every concept and no screen can run. Seeding only in Development shipped an app to Azure that
+// could serve /health but could not answer a single query.
+//
+// Safe to run on each start: SeedAsync returns immediately when rows already exist.
+{
+    using var seedScope = app.Services.CreateScope();
+    var seedDb = seedScope.ServiceProvider.GetRequiredService<MarketEyeDbContext>();
+    try
+    {
+        await MetricConceptSeed.SeedAsync(seedDb, CancellationToken.None);
+    }
+    catch (Exception ex)
+    {
+        // Never let seeding stop the app from starting. An unreachable database is already
+        // reported by /health; crashing here would hide that behind a container failure.
+        Console.Error.WriteLine($"STARTUP WARNING: could not seed MetricConcepts: {ex.Message}");
+    }
 }
 
 // A health endpoint that only says "Unhealthy" forces whoever is on call to go log-diving.
