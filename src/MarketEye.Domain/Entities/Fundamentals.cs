@@ -35,5 +35,16 @@ public class Fundamentals
     public decimal? Revenue { get; set; }
     public decimal? NetIncome { get; set; }
     public decimal? TotalDebt { get; set; }
+
+    /// <summary>
+    /// Diluted weighted-average shares for the period. Needed for market capitalisation, and
+    /// therefore for every price-based ratio (§4.3's FundamentalRatios). Diluted rather than basic
+    /// because it reflects the claim on earnings after convertibles, which is the conservative
+    /// reading and the one that makes P/E comparable across companies with different instruments.
+    /// </summary>
+    public decimal? SharesOutstanding { get; set; }
+
+    /// <summary>Cost of revenue, for gross margin.</summary>
+    public decimal? CostOfRevenue { get; set; }
     public decimal? ShareholdersEquity { get; set; }
 }

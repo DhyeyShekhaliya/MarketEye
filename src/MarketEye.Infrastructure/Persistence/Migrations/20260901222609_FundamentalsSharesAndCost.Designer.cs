@@ -4,6 +4,7 @@ using MarketEye.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace MarketEye.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(MarketEyeDbContext))]
-    partial class MarketEyeDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260901222609_FundamentalsSharesAndCost")]
+    partial class FundamentalsSharesAndCost
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -220,7 +223,7 @@ namespace MarketEye.Infrastructure.Persistence.Migrations
                         .HasColumnType("decimal(18,2)");
 
                     b.Property<decimal?>("SharesOutstanding")
-                        .HasColumnType("decimal(24,4)");
+                        .HasColumnType("decimal(18,2)");
 
                     b.Property<decimal?>("TotalDebt")
                         .HasPrecision(18, 2)

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using MarketEye.Application.Ratios;
 using MarketEye.Domain.Entities;
 using MarketEye.Infrastructure.MarketData.IndianApi;
 using MarketEye.Infrastructure.Persistence;
@@ -90,6 +91,8 @@ public sealed class FundamentalsIngestionService(
 
                 var fundamentals = IndianApiParser.ParseFundamentals(doc, security.Id);
                 report.FundamentalsWritten += await UpsertFundamentalsAsync(fundamentals, ct);
+
+                report.RatiosWritten += await UpsertRatiosAsync(security.Id, fundamentals, ct);
 
                 report.SecuritiesProcessed++;
             }
@@ -197,6 +200,62 @@ public sealed class FundamentalsIngestionService(
         return written;
     }
 
+    /// <summary>
+    /// Derives and stores ratios for each reported period (§4.3).
+    ///
+    /// Each period is priced with the close on or before ITS OWN ReportedDate, not the latest
+    /// price. Using today's close would be lookahead for every historical row, and would silently
+    /// rewrite past ratios on every re-run — so a stored ScreenRun would stop reproducing (§4.5).
+    /// </summary>
+    private async Task<int> UpsertRatiosAsync(
+        int securityId, List<Fundamentals> fundamentals, CancellationToken ct)
+    {
+        if (fundamentals.Count == 0) return 0;
+
+        var existing = await db.FundamentalRatios
+            .Where(r => r.SecurityId == securityId)
+            .ToDictionaryAsync(r => r.ReportedDate, ct);
+
+        var written = 0;
+        foreach (var f in fundamentals)
+        {
+            var price = await db.PriceBars
+                .Where(b => b.SecurityId == securityId && b.Date <= f.ReportedDate)
+                .OrderByDescending(b => b.Date)
+                .Select(b => (decimal?)b.Close)
+                .FirstOrDefaultAsync(ct);
+
+            // No bar at or before the reported date means the period predates our price history.
+            // Ratios needing a price are then underivable, and inventing one is not an option.
+            var basis = ReportingBasis.Consolidated;
+            var computed = RatioCalculator.From(f, price, basis);
+
+            if (existing.TryGetValue(f.ReportedDate, out var current))
+            {
+                current.MarketCap = computed.MarketCap;
+                current.Pe = computed.Pe;
+                current.Pb = computed.Pb;
+                current.Ps = computed.Ps;
+                current.Roe = computed.Roe;
+                current.DebtToEquity = computed.DebtToEquity;
+                current.GrossMargin = computed.GrossMargin;
+                current.Basis = basis;
+            }
+            else
+            {
+                db.FundamentalRatios.Add(computed);
+            }
+            written++;
+        }
+
+        if (written > 0)
+        {
+            await db.SaveChangesAsync(ct);
+            db.ChangeTracker.Clear();
+        }
+        return written;
+    }
+
     private sealed class JsonDocumentHolder(System.Text.Json.JsonDocument doc) : IDisposable
     {
         public void Dispose() => doc.Dispose();
@@ -207,6 +266,7 @@ public sealed class FundamentalsIngestionReport
 {
     public int SecuritiesProcessed { get; set; }
     public int FundamentalsWritten { get; set; }
+    public int RatiosWritten { get; set; }
     public int CorporateActionsWritten { get; set; }
     public int NotFound { get; set; }
     public int Failed { get; set; }

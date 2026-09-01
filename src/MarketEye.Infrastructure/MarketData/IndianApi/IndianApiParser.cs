@@ -149,7 +149,9 @@ public static class IndianApiParser
                 Revenue = Metric(income, "TotalRevenue", "Revenue"),
                 NetIncome = Metric(income, "NetIncome", "NetIncomeAfterTaxes"),
                 TotalDebt = Metric(balance, "TotalDebt", "LongTermDebt"),
-                ShareholdersEquity = Metric(balance, "TotalEquity", "TotalLiabilitiesShareholders'Equity"),
+                ShareholdersEquity = Metric(balance, "TotalEquity"),
+                SharesOutstanding = Metric(income, "DilutedWeightedAverageShares", "TotalCommonSharesOutstanding"),
+                CostOfRevenue = Metric(income, "CostofRevenueTotal"),
             };
 
             // A row with no usable figures is noise; storing it would put empty periods into the

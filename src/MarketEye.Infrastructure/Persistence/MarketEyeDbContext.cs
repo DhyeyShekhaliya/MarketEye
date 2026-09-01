@@ -85,6 +85,12 @@ public class MarketEyeDbContext(DbContextOptions<MarketEyeDbContext> options) : 
             e.Property(x => x.NetIncome).HasPrecision(18, 2);
             e.Property(x => x.TotalDebt).HasPrecision(18, 2);
             e.Property(x => x.ShareholdersEquity).HasPrecision(18, 2);
+            e.Property(x => x.CostOfRevenue).HasPrecision(18, 2);
+
+            // Share counts run to billions for large Indian caps, and market cap multiplies this
+            // by price. Explicit precision because EF's default silently truncates rather than
+            // failing -- a truncated share count would understate market cap without any error.
+            e.Property(x => x.SharesOutstanding).HasPrecision(24, 4);
 
             e.HasOne(x => x.Security).WithMany().HasForeignKey(x => x.SecurityId)
                 .OnDelete(DeleteBehavior.Restrict);
