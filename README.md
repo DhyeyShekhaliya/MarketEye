@@ -1,6 +1,6 @@
-# Sift
+# MarketEye
 
-> **Sift converts natural-language stock-screening ideas into a validated screening DSL, executes
+> **MarketEye converts natural-language stock-screening ideas into a validated screening DSL, executes
 > them against point-in-time market data, and backtests the same strategy without lookahead or
 > survivorship bias.**
 
@@ -64,8 +64,8 @@ machine setup.
 ```bash
 cp .env.example .env          # then change the password
 docker compose up -d          # SQL Server 2022, Developer Edition
-dotnet build Sift.sln
-dotnet run --project src/Sift.Api
+dotnet build MarketEye.sln
+dotnet run --project src/MarketEye.Api
 ```
 
 The API applies EF migrations on startup **in Development only** and exposes `/health`.
@@ -75,8 +75,8 @@ curl localhost:5199/health    # Healthy
 dotnet test                   # unit + integration
 ```
 
-`Sift.IntegrationTests` and `Sift.BacktestTests` start their own SQL Server containers through
-Testcontainers, so the container runtime must be running. `Sift.AiEvals` calls a live LLM and is
+`MarketEye.IntegrationTests` and `MarketEye.BacktestTests` start their own SQL Server containers through
+Testcontainers, so the container runtime must be running. `MarketEye.AiEvals` calls a live LLM and is
 excluded from the default loop.
 
 ## Correctness
@@ -107,23 +107,23 @@ surface**. Benchmark numbers must come off the Azure SQL target.
 
 ```
 src/
-  Sift.Domain/           entities, ScreenCriteria DSL, BacktestDefinition — zero dependencies
-  Sift.Application/      criteria compiler, screening engine, backtest engine
-  Sift.Infrastructure/   EF Core, Dapper, SqlBulkCopy, provider clients
-  Sift.Ai/               LLM client, concept resolution, parse cache, rate limiter
-  Sift.Ingestion/        scheduled jobs, corporate actions, snapshot sealing
-  Sift.Api/              ASP.NET Core Web API
-  Sift.Web/              Blazor Server UI
+  MarketEye.Domain/           entities, ScreenCriteria DSL, BacktestDefinition — zero dependencies
+  MarketEye.Application/      criteria compiler, screening engine, backtest engine
+  MarketEye.Infrastructure/   EF Core, Dapper, SqlBulkCopy, provider clients
+  MarketEye.Ai/               LLM client, concept resolution, parse cache, rate limiter
+  MarketEye.Ingestion/        scheduled jobs, corporate actions, snapshot sealing
+  MarketEye.Api/              ASP.NET Core Web API
+  MarketEye.Web/              Blazor Server UI
 tests/
-  Sift.UnitTests/        indicator math, compiler, validator, architecture guards
-  Sift.IntegrationTests/ Testcontainers + real SQL Server
-  Sift.BacktestTests/    synthetic market + bias guards
-  Sift.AiEvals/          prompt → expected-criteria suite, CI gate
+  MarketEye.UnitTests/        indicator math, compiler, validator, architecture guards
+  MarketEye.IntegrationTests/ Testcontainers + real SQL Server
+  MarketEye.BacktestTests/    synthetic market + bias guards
+  MarketEye.AiEvals/          prompt → expected-criteria suite, CI gate
 ```
 
 Design rationale lives in `PLAN.md`; decisions with trade-offs worth revisiting are in `docs/adr/`.
 
 ---
 
-**Educational purposes only. Not investment advice.** Sift screens and backtests historical data.
+**Educational purposes only. Not investment advice.** MarketEye screens and backtests historical data.
 Past results do not predict future returns.

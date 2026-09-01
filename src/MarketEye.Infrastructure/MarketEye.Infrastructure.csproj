@@ -1,0 +1,33 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\MarketEye.Domain\MarketEye.Domain.csproj" />
+    <ProjectReference Include="..\MarketEye.Application\MarketEye.Application.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Relational" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" />
+    <PackageReference Include="Microsoft.Data.SqlClient" />
+    <PackageReference Include="Dapper" />
+    <PackageReference Include="Microsoft.Extensions.Http.Resilience" />
+    <PackageReference Include="System.Threading.RateLimiting" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+  </ItemGroup>
+
+
+  <ItemGroup>
+    <!-- Fixtures ship next to the assembly so the stub works from any working directory. -->
+    <None Include="MarketData\Fixtures\*.json" CopyToOutputDirectory="PreserveNewest"
+          Link="MarketData\Fixtures\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+</Project>

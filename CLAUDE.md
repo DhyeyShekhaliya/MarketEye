@@ -20,17 +20,17 @@ None exist yet. Once Phase 0 scaffolds the solution these apply (the test framew
 chosen, so adjust filter syntax to match):
 
 ```bash
-dotnet build Sift.sln
-dotnet test                                        # all tests
-dotnet test tests/Sift.UnitTests                   # one project
-dotnet test --filter "FullyQualifiedName~Rsi"      # one test / class
-dotnet run --project src/Sift.Api
-docker compose up -d                               # SQL Server for local dev
-dotnet ef migrations add <Name> --project src/Sift.Infrastructure --startup-project src/Sift.Api
+dotnet build MarketEye.sln
+dotnet test                                     # all tests
+dotnet test tests/MarketEye.UnitTests           # one project
+dotnet test --filter "FullyQualifiedName~Rsi"   # one test / class
+dotnet run --project src/MarketEye.Api
+docker compose up -d                            # SQL Server for local dev
+dotnet ef migrations add <Name> --project src/MarketEye.Infrastructure --startup-project src/MarketEye.Api
 ```
 
-`Sift.IntegrationTests` and `Sift.BacktestTests` need a running SQL Server (Testcontainers).
-`Sift.AiEvals` is a CI gate at ≥85% and calls a live LLM — it is not part of the default local loop.
+`MarketEye.IntegrationTests` and `MarketEye.BacktestTests` need a running SQL Server (Testcontainers).
+`MarketEye.AiEvals` is a CI gate at ≥85% and calls a live LLM — it is not part of the default local loop.
 
 ## Architecture invariants
 

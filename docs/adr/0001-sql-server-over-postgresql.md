@@ -4,7 +4,7 @@
 
 ## Context
 
-Sift needs point-in-time correctness on restated fundamentals and fast analytical scans over
+MarketEye needs point-in-time correctness on restated fundamentals and fast analytical scans over
 millions of daily price bars. PostgreSQL is the more common default and brings pgvector.
 
 ## Decision

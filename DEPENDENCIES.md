@@ -21,15 +21,15 @@ Resolved 2026-09-01 on macOS 15.7.9 / arm64.
 
 ## Packages (all restored and build-verified)
 
-**Sift.Domain** — none. Zero dependencies, per §2.
+**MarketEye.Domain** — none. Zero dependencies, per §2.
 
-**Sift.Application**
+**MarketEye.Application**
 | Package | Version |
 |---|---|
 | Microsoft.Extensions.Logging.Abstractions | 9.0.19 |
 | Microsoft.Extensions.DependencyInjection.Abstractions | 9.0.19 |
 
-**Sift.Infrastructure**
+**MarketEye.Infrastructure**
 | Package | Version | Why |
 |---|---|---|
 | Microsoft.EntityFrameworkCore.SqlServer | 9.0.19 | CRUD/config path (§3) |
@@ -41,7 +41,7 @@ Resolved 2026-09-01 on macOS 15.7.9 / arm64.
 | System.Threading.RateLimiting | 9.0.19 | provider rate limiting (Phase 1) |
 | Microsoft.Extensions.Options.ConfigurationExtensions | 9.0.19 | |
 
-**Sift.Ai**
+**MarketEye.Ai**
 | Package | Version | Why |
 |---|---|---|
 | Azure.AI.OpenAI | 2.1.0 | Azure hosting path |
@@ -50,13 +50,13 @@ Resolved 2026-09-01 on macOS 15.7.9 / arm64.
 | System.Threading.RateLimiting | 9.0.19 | §5.4 |
 | Microsoft.Extensions.Logging.Abstractions | **10.0.11** | forced — see note below |
 
-**Sift.Ingestion**
+**MarketEye.Ingestion**
 | Package | Version |
 |---|---|
 | Microsoft.Extensions.Hosting | 9.0.19 |
 | Microsoft.Extensions.Http.Resilience | 9.10.0 |
 
-**Sift.Api**
+**MarketEye.Api**
 | Package | Version |
 |---|---|
 | Microsoft.AspNetCore.OpenApi | 9.0.19 |
@@ -69,7 +69,7 @@ Resolved 2026-09-01 on macOS 15.7.9 / arm64.
 | Microsoft.AspNetCore.Diagnostics.HealthChecks | 2.2.0 |
 | Microsoft.EntityFrameworkCore.Design | 9.0.19 |
 
-**Sift.Web** — Serilog.AspNetCore 9.0.0. Blazor Server itself is a framework reference.
+**MarketEye.Web** — Serilog.AspNetCore 9.0.0. Blazor Server itself is a framework reference.
 
 **All four test projects**
 | Package | Version |
@@ -81,14 +81,14 @@ Resolved 2026-09-01 on macOS 15.7.9 / arm64.
 | NSubstitute | 5.3.0 |
 | coverlet.collector | 6.0.4 |
 
-**Sift.IntegrationTests and Sift.BacktestTests** additionally: Testcontainers.MsSql 4.14.0,
+**MarketEye.IntegrationTests and MarketEye.BacktestTests** additionally: Testcontainers.MsSql 4.14.0,
 Microsoft.EntityFrameworkCore.SqlServer 9.0.19, Dapper 2.1.79.
 
 ## Things to know before Phase 0
 
 **Logging.Abstractions was split 9.x / 10.x — now resolved by targeting net10.0.** `OpenAI` 2.13.0 → `System.ClientModel` 1.14.0 →
-`Microsoft.Extensions.Logging.Abstractions >= 10.0.3`. Pinning `Sift.Ai` to 9.x is a hard NU1605
-downgrade error, not a warning. Either let `Sift.Ai` take 10.x (done here) or move the whole
+`Microsoft.Extensions.Logging.Abstractions >= 10.0.3`. Pinning `MarketEye.Ai` to 9.x is a hard NU1605
+downgrade error, not a warning. Either let `MarketEye.Ai` take 10.x (done here) or move the whole
 solution to the 10.x Extensions line. Central Package Management would make this one decision
 instead of nine.
 
@@ -127,15 +127,15 @@ own throwaway containers — so this is for the app, EF migrations, and manual i
 
 | | |
 |---|---|
-| Container | `sift-sql-compose` (managed by `docker-compose.yml`) |
+| Container | `marketeye-sql-compose` (managed by `docker-compose.yml`) |
 | Image | `mcr.microsoft.com/mssql/server:2022-latest`, `linux/amd64` |
 | Edition | Developer (§3) |
 | Port | `localhost,1433` |
 | Volume | `netproject_sqldata` → `/var/opt/mssql` (survives restarts) |
-| Database | `Sift` (created by EF migrations) |
+| Database | `MarketEye` (created by EF migrations) |
 
 ```
-Server=localhost,1433;User Id=sa;Password=Sift_Dev_Local_2026!;TrustServerCertificate=True;Encrypt=True
+Server=localhost,1433;User Id=sa;Password=MarketEye_Dev_Local_2026!;TrustServerCertificate=True;Encrypt=True
 ```
 
 Verified from the macOS host: Developer Edition confirmed, a system-versioned temporal table created
@@ -153,7 +153,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-The bootstrap `sift-sql` container created during setup has been removed; `docker-compose.yml`
+The bootstrap `marketeye-sql` container created during setup has been removed; `docker-compose.yml`
 supersedes it. Running both would bind-conflict on 1433 and invites connecting to the wrong
 database.
 
@@ -230,7 +230,7 @@ scaffold restores offline. To re-verify:
 
 ```bash
 dotnet nuget locals global-packages --list
-dotnet restore Sift.sln
+dotnet restore MarketEye.sln
 docker images                 # mssql/server:2022-latest should be present
 docker info                   # daemon reachable; launch Docker.app first
 ```

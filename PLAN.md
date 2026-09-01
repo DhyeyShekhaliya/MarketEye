@@ -1,6 +1,6 @@
-# Sift — AI-Assisted Stock Screener
+# MarketEye — AI-Assisted Stock Screener
 
-> Working name. Rename freely; it only appears in namespaces and the solution file.
+> Named **MarketEye** in revision 3, matching the repository. Previously the working name "Sift".
 > **Revision 2.** Changes from v1 are summarised in §14. Previous version: `PLAN.md.v1.bak`.
 
 **One line:** A .NET platform that converts natural-language screening ideas into a validated internal
@@ -78,20 +78,20 @@ swapped, removed, or fail entirely and the system below it still works.
 ### Solution layout
 
 ```
-Sift.sln
+MarketEye.sln
 ├── src/
-│   ├── Sift.Domain/           entities, ScreenCriteria DSL, BacktestDefinition — zero dependencies
-│   ├── Sift.Application/      criteria compiler, screening engine, backtest engine
-│   ├── Sift.Infrastructure/   EF Core, Dapper, SqlBulkCopy, provider clients
-│   ├── Sift.Ai/               LLM client, concept resolution, parse cache, rate limiter
-│   ├── Sift.Ingestion/        scheduled jobs, corporate actions, snapshot sealing
-│   ├── Sift.Api/              ASP.NET Core Web API
-│   └── Sift.Web/              Blazor Server UI
+│   ├── MarketEye.Domain/           entities, ScreenCriteria DSL, BacktestDefinition — zero dependencies
+│   ├── MarketEye.Application/      criteria compiler, screening engine, backtest engine
+│   ├── MarketEye.Infrastructure/   EF Core, Dapper, SqlBulkCopy, provider clients
+│   ├── MarketEye.Ai/               LLM client, concept resolution, parse cache, rate limiter
+│   ├── MarketEye.Ingestion/        scheduled jobs, corporate actions, snapshot sealing
+│   ├── MarketEye.Api/              ASP.NET Core Web API
+│   └── MarketEye.Web/              Blazor Server UI
 └── tests/
-    ├── Sift.UnitTests/          indicator math, compiler, validator
-    ├── Sift.IntegrationTests/   Testcontainers + real SQL Server
-    ├── Sift.BacktestTests/      synthetic market + bias guards — see §8
-    └── Sift.AiEvals/            prompt → expected-criteria suite, CI gate
+    ├── MarketEye.UnitTests/          indicator math, compiler, validator
+    ├── MarketEye.IntegrationTests/   Testcontainers + real SQL Server
+    ├── MarketEye.BacktestTests/      synthetic market + bias guards — see §8
+    └── MarketEye.AiEvals/            prompt → expected-criteria suite, CI gate
 ```
 
 ---
@@ -299,7 +299,7 @@ result-cache entry by construction. No TTL guessing, no stale reads.
 
 ### 5.6 Eval suite
 
-`Sift.AiEvals` — ~50 `prompt → expected ScreenCriteria` pairs, scored on concept-set match and
+`MarketEye.AiEvals` — ~50 `prompt → expected ScreenCriteria` pairs, scored on concept-set match and
 explicit-filter match separately. **Runs in CI as a gate at ≥85%.** A failed or low-confidence parse
 must degrade to a clarifying question, never to a guessed screen.
 
@@ -501,7 +501,7 @@ recorded. Splits and dividends verified against a hand-checked sample of 20 secu
 - [ ] Interpretation panel with edit-definition (§5.3)
 - [ ] Rate limiter (§5.4), `ParseCache`, `ScreenResultCache`
 - [ ] **Saved strategies** — core workflow, not polish
-- [ ] `Sift.AiEvals` 50 cases wired into CI as a gate
+- [ ] `MarketEye.AiEvals` 50 cases wired into CI as a gate
 
 **Exit:** ≥85% eval, unknown concepts fail closed, a failed parse asks a question.
 
@@ -511,7 +511,7 @@ recorded. Splits and dividends verified against a hand-checked sample of 20 secu
 - [ ] Rebalance loop with T+1 execution, costs, slippage, dividend accrual
 - [ ] Metrics incl. turnover, costs paid, gross vs. net
 - [ ] Equity curve vs. SPY total return, **assumptions panel rendered alongside**
-- [ ] `Sift.BacktestTests`: synthetic market, bias guards, known-bad strategies (§8)
+- [ ] `MarketEye.BacktestTests`: synthetic market, bias guards, known-bad strategies (§8)
 - [ ] Optional: `OR` / `NOT` in the DSL compiler and UI
 
 **Exit:** Synthetic market matches hand-computed values exactly. Every §8.2 guard throws. Bad
@@ -554,7 +554,7 @@ strategies backtest badly.
 
 ## 13. README opening (write this first, it clarifies the product)
 
-> **Sift converts natural-language stock-screening ideas into a validated screening DSL, executes
+> **MarketEye converts natural-language stock-screening ideas into a validated screening DSL, executes
 > them against point-in-time market data, and backtests the same strategy without lookahead or
 > survivorship bias.**
 
@@ -584,9 +584,13 @@ Follow immediately with the §9 measured benchmark table.
 ## 14. Revision log & rejected changes
 
 ### Adopted in revision 3
+- **Renamed Sift → MarketEye**, matching the GitHub repository. Applied across namespaces,
+  projects, the solution, the DbContext, the compose service, the dev database and all docs.
+  `PLAN.md.v1.bak` is left untouched: `CLAUDE.md` keeps it as a diffing baseline, and rewriting
+  it would defeat that.
 - **.NET 10 LTS replaces .NET 9 in §3.** Not a version-chasing change: `OpenAI` 2.13.0 →
   `System.ClientModel` 1.14.0 requires `Microsoft.Extensions.Logging.Abstractions >= 10.0.3`,
-  which made `Sift.Ai` unresolvable on the 9.x line (hard `NU1605`, not a warning). .NET 9 is also
+  which made `MarketEye.Ai` unresolvable on the 9.x line (hard `NU1605`, not a warning). .NET 9 is also
   EOL 2026-11-10, inside this project's own 3–5 month timeline. See `docs/adr/0003`.
 - **Central Package Management adopted** so a future framework-line move is one edit, not eleven.
 - **Phase 0 CI deferred.** Phase 0 was completed with `git init` and a GitHub remote but *without*

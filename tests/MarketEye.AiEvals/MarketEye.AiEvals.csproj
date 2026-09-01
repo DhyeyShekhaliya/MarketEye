@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Placeholder until Phase 2. §5.6 defines a 50-case prompt -> expected-criteria suite that
+       calls a live LLM and gates CI at >= 85%. It is deliberately NOT a runnable test project
+       yet: an empty test project reports "zero tests ran" as a failure, and padding it with
+       assertions that test nothing would be worse. Phase 2 restores the test packages,
+       sets IsTestProject, and wires it as a CI gate (not part of the default local loop). -->
+  <PropertyGroup>
+    <IsTestProject>false</IsTestProject>
+    <OutputType>Library</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\MarketEye.Ai\MarketEye.Ai.csproj" />
+    <ProjectReference Include="..\..\src\MarketEye.Application\MarketEye.Application.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+
+  <ItemGroup>
+  </ItemGroup>
+
+</Project>

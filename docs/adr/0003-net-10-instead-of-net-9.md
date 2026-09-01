@@ -19,8 +19,8 @@ Warming the NuGet cache against the §2 layout produced a hard `NU1605` **error*
 OpenAI 2.13.0 → System.ClientModel 1.14.0 → Microsoft.Extensions.Logging.Abstractions >= 10.0.3
 ```
 
-`Sift.Ai` could not resolve on the 9.x `Microsoft.Extensions.*` line. The only ways forward on
-.NET 9 were to pin `Sift.Ai` alone to the 10.x Extensions packages — leaving one project on a
+`MarketEye.Ai` could not resolve on the 9.x `Microsoft.Extensions.*` line. The only ways forward on
+.NET 9 were to pin `MarketEye.Ai` alone to the 10.x Extensions packages — leaving one project on a
 different dependency line from the other ten — or to hold the AI SDK back at an older version.
 
 ## Supporting reason
