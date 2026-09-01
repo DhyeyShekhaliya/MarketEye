@@ -110,6 +110,7 @@ public static class InfrastructureServiceCollectionExtensions
         .AddStandardResilienceHandler();
 
         services.AddScoped<FundamentalsIngestionService>();
+        services.AddSingleton(new Reconciliation.CorporateActionReconciler(cs));
         services.AddScoped<SnapshotLifecycle>();
 
         // The vocabulary is ~20 rows read on nearly every request, so it is loaded once per scope

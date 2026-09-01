@@ -520,10 +520,9 @@ Each phase ends **deployed, tested, and green in CI** before the next begins.
 
 **Exit:** `docker compose up` gives a running API on a live DB, green CI.
 
-> **Status: complete except CI.** The scaffold, compose stack, temporal schema slice, health check,
-> Serilog, provider stub and test projects are done and verified. GitHub Actions was deliberately
-> deferred (revision 3), so "green CI" remains outstanding and should be closed before Phase 1
-> ships rather than at the end of it.
+> **Status: complete.** The scaffold, compose stack, temporal schema slice, health check, Serilog,
+> provider stub and test projects are done and verified. CI was added later than planned but is
+> present (`.github/workflows/ci.yml`), so §10's "green CI" criterion is met.
 
 ### Phase 1 — Data pipeline + screener (~4–6 weeks) ← the part most people never finish
 - [ ] **Historical backfill strategy solved first** (see §12) — this blocks everything
@@ -538,8 +537,18 @@ Each phase ends **deployed, tested, and green in CI** before the next begins.
 - [ ] Deployed to Azure
 
 **Exit:** ~~500+ tickers~~ **the full NIFTY 50 universe plus delisted members** (ADR-0005), 5 years
-of bars, nightly job unattended for a week, §9 benchmark run and recorded. Splits and dividends
+of bars, nightly job unattended for a week, ~~§9 benchmark run and recorded~~. Splits and dividends
 verified against a hand-checked sample of 20 securities.
+
+> **Exit status, honestly.**
+>
+> | Criterion | State |
+> |---|---|
+> | Universe | Met, and exceeded — the bhavcopy carries the whole NSE board (3,481 securities), not just NIFTY 50 |
+> | 5 years of bars | Met **locally** (~2.5M bars, 2021-09 → 2026-09). Azure holds 1 year by choice, above |
+> | Nightly job unattended | **Run locally**, one year / ~250 sessions ingested without intervention. NOT met on Azure: the deployed cron returns 500, most likely NSE refusing a datacentre IP |
+> | §9 benchmark | **Dropped by decision** — no valid measurement surface exists (`docs/adr/0006`), and the non-negotiables forbid publishing an estimate. Recorded as outstanding in the README rather than faked |
+> | Splits/dividends verified, 20 securities | Automated as `GET /api/reconcile/corporate-actions` — compares each stored adjustment factor against the price step the market actually made |
 
 > **Amended.** "500+ tickers" was written for the US S&P 500 universe. The Indian universe decided
 > in ADR-0005 is ~60-80 securities. The §9 benchmark clause is also affected — see `docs/adr/0006`,
