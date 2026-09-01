@@ -1,6 +1,6 @@
 # ADR-0005: Market data provider for Indian equities
 
-**Status:** Proposed — awaiting a decision · **Date:** 2026-09-01 · **Phase:** 1
+**Status:** Accepted · **Date:** 2026-09-01 · **Phase:** 1
 
 ## Context
 
@@ -33,10 +33,38 @@ plan through Hobby / Developer / Growth Analyst / Pro, each on its own subdomain
 Strong fit for §4.1 fundamentals and §5.2's concept vocabulary, and India-native means Indian
 reporting conventions are native rather than mapped.
 
-**Unresolved, and decisive:** published material does not state delisted/inactive company
-coverage, historical EOD depth in years, or per-plan rate limits. Its corporate-actions
-description names dividends, splits, mergers and acquisitions — **bonus and rights issues are not
-mentioned**, and ADR-0004 explains why those two are not optional in India.
+**Resolved against it, on two counts.** The published endpoint list settles what the marketing
+page left open:
+
+- **No delisted/inactive endpoint exists.** The survivorship requirement fails outright.
+- **No endpoint returns the full NSE/BSE roster.** `/stock` is a by-name lookup and
+  `/industry_search` returns filtered subsets. This is the more disqualifying of the two: nightly
+  ingestion needs "give me every security" as its first call, and §4.5's snapshot cannot be built
+  from an API you can only query if you already know what to ask for.
+
+`/historical_data` does offer 1m / 6m / 1yr / 3yr / 5yr / 10yr / max, so price depth is adequate.
+Corporate actions appear only as a `stockCorporateActionData` field inside `/stock`, with no
+confirmation that bonus and rights issues are included.
+
+**Verdict:** usable as a *fundamentals* source, not as the price or universe source.
+
+### NSE bhavcopy archive — free, official, survivorship-free by construction
+
+The bhavcopy is NSE's official end-of-day file listing **every security that traded that day**
+with its OHLCV. Archives are freely downloadable and public mirrors carry two decades of history.
+
+This solves the binding constraint almost by accident: a company delisted in 2022 still appears in
+every bhavcopy up to its last trading day. Reconstructing the universe as-of any past date is then
+a matter of reading that date's file — which is exactly the point-in-time universe §7 requires,
+obtained without paying for a "survivorship-free" product, because the raw daily record was never
+survivor-filtered in the first place.
+
+It is also the same shape as §4.5's snapshot model: one immutable file per trading day.
+
+**Costs:** more ingestion work than a REST API — download, parse, normalise, handle NSE's format
+changes over the years and the holiday calendar. No fundamentals. Corporate actions must come from
+NSE's separate corporate-actions reports or a vendor. Ticker-change reconciliation (§4.4) is
+manual, since bhavcopy keys on symbol rather than a stable id.
 
 ### EODHD — global, explicit survivorship-free product
 
@@ -69,31 +97,56 @@ against §1's "not connected to a brokerage" boundary even for data-only use.
 
 ## Recommendation
 
-**Verify delisted coverage before committing to anything.** One question decides this, and it
-cannot be answered from public marketing pages — it needs a direct answer from the vendor or a
-trial key:
+**Bhavcopy archive for prices and universe; a REST vendor for fundamentals.**
 
-> Do you provide historical daily prices and a listing of companies **delisted** from NSE/BSE over
-> the last 5 years, and do you retain their price history after delisting?
+No single Indian source covers both well. The split follows the requirement that cannot be
+retrofitted: prices and universe membership must be survivorship-free from day one, and the
+bhavcopy archive is that, for free. Fundamentals can be added, corrected and re-ingested later
+without invalidating anything already stored, so that side is a cost/convenience choice rather
+than a correctness one.
 
-If **indianapi.in answers yes**, take it: India-native, cheapest, best fundamentals fit — subject
-to confirming bonus/rights are in the corporate-actions feed.
+This deviates from §3's "one provider behind `IMarketDataProvider`". The interface still holds —
+it becomes two implementations composed behind it rather than one — and §3's underlying point,
+that vendor choice stays swappable, is preserved.
 
-If **it answers no**, there are two honest paths, and the choice is a product decision rather than
-a technical one:
+If the extra ingestion work is unattractive, **EODHD alone is the coherent paid alternative**: it
+sells delisted history explicitly and carries fundamentals, at $19.99-99.99/mo, inside §12's
+budget. It trades money for the bhavcopy parsing work and accepts a global schema over native
+Indian conventions.
 
-1. **Pair it with EODHD** for the delisted universe. Two providers behind one
-   `IMarketDataProvider` — more work, but §7 and §8.2 are satisfiable as written.
-2. **Ship v1 survivorship-limited**, with the limitation stated on every backtest view next to the
-   assumptions panel §7 already requires. This is defensible only if it is *disclosed*, and it
-   means §8.2's universe guard is written as a known-failing test rather than quietly dropped.
-
-What must not happen is adopting a live-only universe and leaving §8.2's guard unimplemented. That
-converts a documented limitation into a silent one, which is precisely the failure mode §8 exists
-to prevent.
+What must not happen is adopting a live-only universe and leaving §8.2's guard unimplemented.
+That converts a documented limitation into a silent one — precisely the failure mode §8 exists to
+prevent.
 
 ## Not decided here
 
 Whether to pay for one month of a higher tier for the initial backfill and then drop to a cheaper
 daily-incremental plan — §12's suggested strategy. That depends on the provider chosen and on
 whether the backfill endpoint is bulk or per-ticker.
+
+
+## Decision taken
+
+- **Prices and universe:** NSE bhavcopy archive. Free, official, survivorship-free by construction.
+- **Fundamentals:** indianapi.in. India-native, and retrofittable if it disappoints.
+- **Universe:** NIFTY 50 plus its delisted historical members.
+
+Two `IMarketDataProvider` implementations composed behind the interface, per the recommendation
+above.
+
+### Open item carried into implementation
+
+indianapi.in exposes corporate actions only as a `stockCorporateActionData` field on `/stock`, and
+does not document whether **bonus and rights issues** are included. ADR-0004 explains why those
+two are not optional in India. Until confirmed, corporate actions must be sourced from NSE's own
+corporate-actions reports rather than assumed present. Verify before the adjustment logic is
+written, not after.
+
+### Consequence for §9
+
+§9's benchmark is defined at "500 securities × 5 years (≈630k bars)". A NIFTY 50 universe is
+~50 securities (plus delisted members), roughly a tenth of that. The §9 figure is therefore **not
+measurable as written** on this universe. Either the benchmark definition is restated for the
+chosen universe, or the benchmark is run against a wider bhavcopy-derived set than the screening
+universe. This must be settled before any performance number is published, since the project's
+non-negotiables require measured numbers under a stated definition.

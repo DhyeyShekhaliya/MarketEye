@@ -619,7 +619,10 @@ moved to Phase 2 · realistic timeline (§10) · backfill and licensing risks (�
       not anticipate — bonus/rights issues, circuit limits vs. T+1 fills, India-calibrated costs,
       the NIFTY benchmark, cross-exchange identity, standalone vs. consolidated fundamentals, and
       firmer licensing.
-- [ ] Universe for v1 — was "S&P 500 plus delisted members". The Indian equivalent (NIFTY 500 plus
-      delisted members) depends on which provider can supply delisted history. See `docs/adr/0005`.
+- [x] Universe for v1 — **RESOLVED: NIFTY 50 plus its delisted historical members**, sourced from
+      the NSE bhavcopy archive (free, survivorship-free by construction). Fundamentals from
+      indianapi.in. See `docs/adr/0005`.
+      **Note:** §9's benchmark is defined at 500 securities; a NIFTY 50 universe is ~10% of that,
+      so §9 is not measurable as written and must be restated before any number is published.
 - [ ] Auth — ASP.NET Core Identity (simpler, sufficient) vs. Entra ID.
 - [ ] Multi-user from Phase 2, or single-user until Phase 4?
