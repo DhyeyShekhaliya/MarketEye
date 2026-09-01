@@ -21,6 +21,7 @@ public class MarketEyeDbContext(DbContextOptions<MarketEyeDbContext> options) : 
     public DbSet<FundamentalRatios> FundamentalRatios => Set<FundamentalRatios>();
     public DbSet<MetricConceptEntity> MetricConcepts => Set<MetricConceptEntity>();
     public DbSet<ScreenRun> ScreenRuns => Set<ScreenRun>();
+    public DbSet<ApiCallBudget> ApiCallBudgets => Set<ApiCallBudget>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -184,6 +185,17 @@ public class MarketEyeDbContext(DbContextOptions<MarketEyeDbContext> options) : 
             // The validator matches ordinally; a case-insensitive duplicate would make which row
             // wins depend on collation.
             e.HasIndex(x => x.Name).IsUnique();
+        });
+
+        b.Entity<ApiCallBudget>(e =>
+        {
+            e.ToTable("ApiCallBudgets");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Provider).HasMaxLength(32).IsRequired();
+
+            // One row per provider per day, enforced by the database. Two concurrent callers
+            // creating separate rows would each see half the usage and together double the quota.
+            e.HasIndex(x => new { x.Provider, x.Date }).IsUnique();
         });
 
         b.Entity<ScreenRun>(e =>

@@ -157,3 +157,41 @@ measurable as written** on this universe. Either the benchmark definition is res
 chosen universe, or the benchmark is run against a wider bhavcopy-derived set than the screening
 universe. This must be settled before any performance number is published, since the project's
 non-negotiables require measured numbers under a stated definition.
+
+
+## Rate limit: 500 requests/day, and what it forces
+
+indianapi.in's free tier allows **500 requests per day**. With 3,481 securities now in the
+database, one full fundamentals pass over the whole market would take **seven days** — and would
+never be current, because the next pass would start before the last finished.
+
+This is what makes ADR-0005's universe decision load-bearing rather than presentational:
+
+| Scope | Securities | Calls for a full refresh | Verdict |
+|---|---|---|---|
+| Whole NSE board | 3,481 | 7 days | Impossible to keep fresh |
+| NIFTY 50 + delisted members | ~60-80 | Well under one day | Comfortable, with headroom |
+
+Three consequences for the ingestion design:
+
+**One `/stock` call serves both purposes.** Fundamentals and corporate actions both arrive on that
+endpoint (`stockCorporateActionData` is a field on the `/stock` response). Fetching them as two
+separate calls would double consumption for no gain — they must be parsed from one response.
+
+**The budget is enforced before the call, and persisted.** `RequestBudget` records usage per
+provider per UTC day in `ApiCallBudgets`, with a unique index on (provider, date). In-memory
+counting is not sufficient: App Service F1 unloads after ~20 minutes idle, so an in-memory counter
+resets to zero on every cold start and would silently permit many times the quota. Checking before
+rather than after matters too — discovering exhaustion by receiving a 429 has already spent the
+call.
+
+**Refresh cadence follows how often the data actually changes.** Quarterly results change four
+times a year and corporate actions are sparse. Re-fetching every security every night would burn
+the quota on unchanged data. Fundamentals should be fetched when stale or when a filing is
+expected, not on a fixed daily loop.
+
+### Consequence for Phase 1's exit criteria
+
+§10's "nightly job unattended for a week" is unaffected — the nightly *price* ingest is one
+bhavcopy download, not an API call against this quota. Only the fundamentals and corporate-actions
+paths consume it.

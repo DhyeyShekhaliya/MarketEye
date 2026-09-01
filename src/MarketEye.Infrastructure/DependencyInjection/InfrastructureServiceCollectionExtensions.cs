@@ -45,6 +45,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton(new IndicatorBulkWriter(cs));
         services.AddSingleton<IsinResolver>();
         services.AddScoped<BackfillService>();
+        services.AddScoped<MarketData.RequestBudget>();
         services.AddScoped(sp => new DelistingDetector(
             cs, sp.GetRequiredService<ILoggerFactory>().CreateLogger<DelistingDetector>()));
 
