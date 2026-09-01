@@ -302,6 +302,7 @@ app.MapPost("/api/ingest/fundamentals", async (
     IConfiguration config,
     FundamentalsIngestionService service,
     int? max,
+    string? symbols,
     CancellationToken ct) =>
 {
     var expected = config["Ingestion:TriggerSecret"];
@@ -318,7 +319,11 @@ app.MapPost("/api/ingest/fundamentals", async (
     try
     {
         // Defaults well under the daily allowance so an accidental call cannot spend it all.
-        var report = await service.RunAsync(max ?? 50, ct);
+        var explicitSymbols = symbols?
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+
+        var report = await service.RunAsync(max ?? 50, explicitSymbols, ct);
         return Results.Ok(report);
     }
     catch (Exception ex)

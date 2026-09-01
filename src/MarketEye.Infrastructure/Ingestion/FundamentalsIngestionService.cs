@@ -18,8 +18,14 @@ public sealed class FundamentalsIngestionService(
     IndianApiClient client,
     ILogger<FundamentalsIngestionService> logger)
 {
+    /// <param name="symbols">
+    /// Optional explicit tickers. Without it the service picks by priority, which is alphabetical
+    /// within "never fetched" -- and that lands on micro-caps the provider may not cover, making a
+    /// test run look like a mapping failure when it is really a coverage gap. Naming symbols keeps
+    /// diagnosis cheap in a 500/day budget.
+    /// </param>
     public async Task<FundamentalsIngestionReport> RunAsync(
-        int maxSecurities, CancellationToken ct)
+        int maxSecurities, IReadOnlyList<string>? symbols, CancellationToken ct)
     {
         var report = new FundamentalsIngestionReport();
 
@@ -36,13 +42,26 @@ public sealed class FundamentalsIngestionService(
         // Priority order: securities never fetched come first, then the least recently refreshed.
         // Quarterly results change four times a year, so re-fetching everything nightly would
         // spend the quota on unchanged data (ADR-0005).
-        var securities = await db.Securities
-            .Where(s => s.IsActive)
-            .OrderBy(s => db.Fundamentals.Any(f => f.SecurityId == s.Id) ? 1 : 0)
-            .ThenBy(s => s.Ticker)
+        var query = db.Securities.Where(s => s.IsActive);
+
+        if (symbols is { Count: > 0 })
+        {
+            query = query.Where(s => symbols.Contains(s.Ticker));
+        }
+        else
+        {
+            query = query
+                .OrderBy(s => db.Fundamentals.Any(f => f.SecurityId == s.Id) ? 1 : 0)
+                .ThenBy(s => s.Ticker);
+        }
+
+        var securities = await query
             .Take(take)
             .Select(s => new { s.Id, s.Ticker })
             .ToListAsync(ct);
+
+        logger.LogInformation("Fetching fundamentals for: {Tickers}",
+            string.Join(", ", securities.Select(s => s.Ticker)));
 
         foreach (var security in securities)
         {
