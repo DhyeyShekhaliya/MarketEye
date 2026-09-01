@@ -1,5 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using MarketEye.Infrastructure.DependencyInjection;
@@ -48,7 +51,39 @@ if (app.Environment.IsDevelopment())
     await MetricConceptSeed.SeedAsync(db, CancellationToken.None);
 }
 
-app.MapHealthChecks("/health");
+// A health endpoint that only says "Unhealthy" forces whoever is on call to go log-diving.
+// Reporting the failing check and its reason turns a deployment mystery into a readable answer.
+app.MapHealthChecks("/health", new HealthCheckOptions
+{
+    ResponseWriter = async (context, report) =>
+    {
+        context.Response.ContentType = "application/json";
+
+        var payload = new
+        {
+            status = report.Status.ToString(),
+            // Reveals whether config resolution worked at all, without exposing the credential:
+            // the placeholder below is what the app substitutes when the setting is missing.
+            connectionStringConfigured =
+                !string.IsNullOrWhiteSpace(builder.Configuration.GetConnectionString("MarketEye")),
+            checks = report.Entries.Select(e => new
+            {
+                name = e.Key,
+                status = e.Value.Status.ToString(),
+                error = Redact(e.Value.Exception?.Message),
+            }),
+        };
+
+        await context.Response.WriteAsync(
+            JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true }));
+    },
+});
+
+// SQL exceptions can echo the connection string. Strip anything password-shaped before it
+// reaches an unauthenticated endpoint.
+static string? Redact(string? message) => message is null
+    ? null
+    : Regex.Replace(message, @"(?i)(password|pwd)\s*=\s*[^;]*", "$1=***");
 
 app.MapGet("/", () => Results.Ok(new
 {
