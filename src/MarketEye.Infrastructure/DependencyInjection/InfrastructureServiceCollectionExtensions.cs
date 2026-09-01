@@ -25,9 +25,29 @@ public static class InfrastructureServiceCollectionExtensions
         // exception on the first real query. Registered once, at composition.
         DapperTypeHandlers.Register();
 
-        var cs = config.GetConnectionString("MarketEye")
-                 ?? throw new InvalidOperationException(
-                     "ConnectionStrings:MarketEye is not configured. Copy .env.example to .env and run 'docker compose up -d'.");
+        // Deliberately NOT throwing here.
+        //
+        // Throwing during service registration kills the process before any logging is wired up.
+        // On App Service that surfaces as a bare "ContainerStartupFailure" with no application
+        // output at all -- the operator is told the container died but not why, and has to go
+        // hunting through platform logs. That cost real time on the first deployment.
+        //
+        // Instead the app boots, /health reports Unhealthy, and the reason is a readable string
+        // over HTTP. A misconfigured app that can explain itself beats one that vanishes.
+        var cs = config.GetConnectionString("MarketEye");
+
+        if (string.IsNullOrWhiteSpace(cs))
+        {
+            Console.Error.WriteLine(
+                "STARTUP WARNING: ConnectionStrings:MarketEye is not configured. The app will " +
+                "start but /health will report Unhealthy. Locally: copy .env.example to .env and " +
+                "run 'docker compose up -d'. On Azure: App Service > Environment variables > " +
+                "Connection strings, name 'MarketEye', type SQLAzure.");
+
+            // A syntactically valid string pointing nowhere. EF can build its model, the health
+            // check runs and fails with a real message, and nothing silently reads a live database.
+            cs = "Server=tcp:unconfigured,1433;Database=unconfigured;Connection Timeout=1;";
+        }
 
         services.AddDbContext<MarketEyeDbContext>(o => o.UseSqlServer(cs, sql =>
         {
