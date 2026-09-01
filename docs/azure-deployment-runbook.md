@@ -20,6 +20,94 @@ free tier.
 
 ## Step 1 — create the resources
 
+You can do this in the portal (below) or the CLI (further down). The portal is easier to get
+right the first time, because the two settings that actually matter — the **F1** tier and the SQL
+**free offer** — are both easy to miss and neither can be changed later without recreating.
+
+### 1a. Resource group
+
+1. [portal.azure.com](https://portal.azure.com) → search **Resource groups** → **+ Create**
+2. **Subscription:** yours · **Name:** `marketeye-rg`
+3. **Region:** **Central India**
+4. **Review + create** → **Create**
+
+Region matters a little: the data is Indian and the nightly job fetches from NSE, so keeping
+compute near the source shortens that hop.
+
+### 1b. App Service (the API)
+
+1. Search **App Services** → **+ Create** → **Web App**
+2. **Basics:**
+   - **Resource group:** `marketeye-rg`
+   - **Name:** `marketeye-api` — this becomes `marketeye-api.azurewebsites.net` and must be
+     globally unique. Add a suffix if it is taken.
+   - **Publish:** Code
+   - **Runtime stack:** **.NET 10 (LTS)**
+   - **Operating System:** Linux
+   - **Region:** Central India
+3. **Pricing plan — this is the step people miss.** The default is a paid tier. Click
+   **Explore pricing plans** (or the "Change size" link), open the **Dev/Test** tab, choose
+   **F1 — Free**, and **Select**. Confirm the summary reads **Free F1** before continuing.
+4. **Deployment** tab: leave GitHub Actions **disabled**. Deployment is a zip push in step 4;
+   wiring CI here creates a second, competing pipeline.
+5. **Monitoring** tab: Application Insights **No**. It is optional in the app, and enabling it
+   attaches a billable resource for a project that is deliberately free-tier.
+6. **Review + create** → **Create**
+
+> **One F1 plan hosts one app.** Do not create a second Web App for `MarketEye.Web` on this plan.
+> Blazor Server holds a persistent circuit per visitor, and both apps would compete for the same
+> 60 CPU-minutes/day. Run the Web project locally against the deployed API.
+
+### 1c. Azure SQL Database (free offer)
+
+The free grant is applied **at creation only**. A database created without it cannot be converted
+later — you would have to delete and recreate.
+
+1. Search **SQL databases** → **+ Create**
+2. **Basics:**
+   - **Resource group:** `marketeye-rg`
+   - **Database name:** `MarketEye`
+   - **Server:** **Create new** →
+     - **Server name:** `marketeye-sql-<something-unique>`
+     - **Location:** Central India
+     - **Authentication:** **Use SQL authentication**
+     - Set an admin login and password — **write these down now**, you need them for migrations
+       in step 2 and they cannot be recovered later.
+   - **Want to use SQL elastic pool?** No
+   - **Workload environment:** Development
+3. **Compute + storage** → **Configure database:**
+   - **Service tier:** **General Purpose** → **Serverless**
+   - Look for the **Apply free offer** / "free database" option and **tick it**
+     (100,000 vCore-seconds/month, 32 GB). If you do not see it, check the banner at the top of
+     the blade — Azure surfaces it as a prompt rather than a checkbox in some views.
+   - **Auto-pause delay:** 1 hour
+   - **Apply**
+4. **Backup storage redundancy:** **Locally-redundant** — the cheapest, and this is dev data you
+   can re-ingest from the archive at any time.
+5. **Networking** tab:
+   - **Connectivity method:** Public endpoint
+   - **Allow Azure services and resources to access this server:** **Yes** — without this the App
+     Service cannot reach the database
+   - **Add current client IP address:** **Yes** — without this your migrations in step 2 fail
+6. **Review + create** → **Create**. Provisioning takes a few minutes.
+
+### Verify before moving on
+
+On the SQL database **Overview** blade, confirm the tier reads **General Purpose: Serverless** and
+that the free-offer banner or "Free" label is present. Two reasons this matters:
+
+- **Columnstore.** §4.2 needs clustered columnstore, which vCore General Purpose supports but the
+  DTU **Basic** and **Standard S0–S2** tiers do not. Landing on a DTU tier means the migration in
+  step 2 will appear to succeed while `CCI_PriceBars` silently does not exist.
+- **The free grant.** If it was not applied at creation, this database is billable from now on.
+
+Then grab the connection string: **Overview → Show database connection strings → ADO.NET**. Paste
+your admin password into the `Password=` placeholder — the portal does not fill it in.
+
+### CLI equivalent
+
+If you would rather script it:
+
 ```bash
 az login
 az group create --name marketeye-rg --location centralindia
@@ -36,14 +124,8 @@ az webapp create \
 Pick `centralindia` — the data is Indian and latency to NSE matters for the nightly fetch.
 `marketeye-api` must be globally unique; if it is taken, add a suffix.
 
-**Azure SQL free offer must be created in the portal**, not the CLI — the free grant is applied by
-a specific creation flow:
-
-1. Portal → Create → SQL Database
-2. Under Compute + storage, choose **General Purpose → Serverless**
-3. Tick **Apply free offer** (100,000 vCore-seconds/month, 32 GB)
-4. Set auto-pause delay to **1 hour**
-5. Networking → allow Azure services, and add your own IP so you can run migrations
+The SQL database still has to be created in the portal — the free grant is applied by that
+creation flow, not by a CLI flag. Follow **1c** above.
 
 ## Step 2 — apply migrations from your machine
 
