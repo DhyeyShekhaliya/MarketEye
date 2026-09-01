@@ -7,6 +7,7 @@ using MarketEye.Infrastructure.MarketData;
 using System.Net;
 using MarketEye.Infrastructure.Ingestion;
 using MarketEye.Infrastructure.MarketData.Bhavcopy;
+using MarketEye.Infrastructure.MarketData.IndianApi;
 using MarketEye.Infrastructure.Persistence;
 using MarketEye.Infrastructure.Persistence.TypeHandlers;
 using MarketEye.Infrastructure.Screening;
@@ -99,6 +100,16 @@ public static class InfrastructureServiceCollectionExtensions
         });
 
         services.AddScoped<BhavcopyIngestionService>();
+
+        services.AddHttpClient<IndianApiClient>(client =>
+        {
+            client.BaseAddress = new Uri(
+                config["Provider:IndianApi:BaseUrl"] ?? "https://stock.indianapi.in");
+            client.Timeout = TimeSpan.FromSeconds(60);
+        })
+        .AddStandardResilienceHandler();
+
+        services.AddScoped<FundamentalsIngestionService>();
         services.AddScoped<SnapshotLifecycle>();
 
         // The vocabulary is ~20 rows read on nearly every request, so it is loaded once per scope

@@ -295,6 +295,41 @@ app.MapPost("/api/ingest/backfill", async (
     return Results.Ok(report);
 });
 
+// Fundamentals and corporate actions. Separate from the price ingest because it consumes the
+// provider's 500/day quota, while the bhavcopy path does not (ADR-0005).
+app.MapPost("/api/ingest/fundamentals", async (
+    HttpContext http,
+    IConfiguration config,
+    FundamentalsIngestionService service,
+    int? max,
+    CancellationToken ct) =>
+{
+    var expected = config["Ingestion:TriggerSecret"];
+    if (string.IsNullOrWhiteSpace(expected)) return Results.Problem(
+        detail: "Ingestion:TriggerSecret is not configured.", statusCode: 503);
+
+    var provided = http.Request.Headers["X-Ingest-Secret"].ToString();
+    if (!CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(provided), Encoding.UTF8.GetBytes(expected)))
+    {
+        return Results.Unauthorized();
+    }
+
+    try
+    {
+        // Defaults well under the daily allowance so an accidental call cannot spend it all.
+        var report = await service.RunAsync(max ?? 50, ct);
+        return Results.Ok(report);
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem(
+            title: "Fundamentals ingestion failed",
+            detail: $"{ex.GetType().Name}: {ex.Message}",
+            statusCode: StatusCodes.Status500InternalServerError);
+    }
+});
+
 app.Run();
 
 /// <summary>Request body for POST /api/screen.</summary>

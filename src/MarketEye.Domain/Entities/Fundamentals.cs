@@ -22,6 +22,16 @@ public class Fundamentals
     /// </summary>
     public DateOnly ReportedDate { get; set; }
 
+    /// <summary>
+    /// True when <see cref="ReportedDate"/> was ESTIMATED from a filing deadline rather than read
+    /// from the provider (see ReportingLag). The current provider supplies no reporting date, so
+    /// this is true for everything it feeds in.
+    ///
+    /// It exists so that no downstream analysis can mistake an approximation for a filing date.
+    /// §12's reconciliation should sample real announcement dates against these values.
+    /// </summary>
+    public bool IsReportedDateEstimated { get; set; }
+
     public decimal? Revenue { get; set; }
     public decimal? NetIncome { get; set; }
     public decimal? TotalDebt { get; set; }

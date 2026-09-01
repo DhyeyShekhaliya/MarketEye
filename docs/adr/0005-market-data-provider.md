@@ -195,3 +195,46 @@ expected, not on a fixed daily loop.
 §10's "nightly job unattended for a week" is unaffected — the nightly *price* ingest is one
 bhavcopy download, not an API call against this quota. Only the fundamentals and corporate-actions
 paths consume it.
+
+
+## The provider supplies no reporting date
+
+Confirmed against a live `/stock` response. Each entry in `financials` carries:
+
+- `EndDate` — the fiscal period end (e.g. `2026-03-31`)
+- `StatementDate` — **a constant** (`2021-03-31` on every row), and therefore unusable
+
+There is no field giving the date the market learned the figures.
+
+§4.1 is explicit that point-in-time correctness needs **both** conditions, and that
+`ReportedDate <= @asOfDate` is the one handling reporting lag. Using `EndDate` in its place would
+let a screen run on 1 April 2024 see FY2024 annual results that were published two months later.
+That is not a rounding error: it is lookahead bias that manufactures alpha, and it produces
+backtests that look excellent and are fiction.
+
+### What was done
+
+`ReportingLag` estimates the reported date from SEBI's filing deadlines — 60 days after a financial
+year end, 45 days after a quarter end — and every ingested row sets
+`Fundamentals.IsReportedDateEstimated = true`.
+
+The estimate errs **late** on purpose. Erring late means a screen occasionally misses a company
+whose results were already public: a missed opportunity, visible as a slightly conservative result.
+Erring early means inventing knowledge nobody had. Only the first of those is survivable.
+
+### What this costs, stated plainly
+
+Fundamentals-based screening is **point-in-time correct to within the filing window, not to the
+day**. That is weaker than §4.1 asks for, and it is a property of the data source rather than
+something the code can fix.
+
+Two ways to close the gap later, in order of effort:
+
+1. Source real announcement dates from NSE's corporate-announcements feed and overwrite the
+   estimates, clearing the flag as each is confirmed.
+2. Record `IsReportedDateEstimated` in backtest output so any result computed on estimated dates
+   carries that caveat next to the equity curve, as §7 already requires for costs and execution.
+
+§12's 20-security reconciliation should sample real announcement dates against these estimates and
+record the observed error distribution. If actual filings cluster well inside the deadline, the
+estimate is conservative by more than necessary and can be tightened with evidence.
