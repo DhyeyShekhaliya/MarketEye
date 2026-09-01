@@ -39,7 +39,7 @@ compute near the source shortens that hop.
 1. Search **App Services** → **+ Create** → **Web App**
 2. **Basics:**
    - **Resource group:** `marketeye-rg`
-   - **Name:** `marketeye-api` — this becomes `marketeye-api.azurewebsites.net` and must be
+   - **Name:** `marketeye-api` — this becomes `https://marketeye-api-dcekame4fsdzctae.indiasouthcentral-01.azurewebsites.net` and must be
      globally unique. Add a suffix if it is taken.
    - **Publish:** Code
    - **Runtime stack:** **.NET 10 (LTS)**
@@ -233,7 +233,7 @@ If it returns `Unhealthy`, the SQL health check is failing. Most likely causes, 
 Then check the secret is wired, without triggering an actual ingest:
 
 ```bash
-curl -sS -X POST https://marketeye-api.azurewebsites.net/api/ingest/trigger
+curl -sS -X POST https://marketeye-api-dcekame4fsdzctae.indiasouthcentral-01.azurewebsites.net/api/ingest/trigger
 ```
 
 Expect **401 Unauthorized** — that is the correct answer for a request with no secret header. A
@@ -365,7 +365,7 @@ GitHub → repo → Settings → Secrets and variables → Actions:
 
 | Secret | Value |
 |---|---|
-| `MARKETEYE_BASE_URL` | `https://marketeye-api.azurewebsites.net` |
+| `MARKETEYE_BASE_URL` | `https://marketeye-api-dcekame4fsdzctae.indiasouthcentral-01.azurewebsites.net` |
 | `MARKETEYE_INGEST_SECRET` | the `$SECRET` from step 3 |
 
 Then trigger `.github/workflows/nightly-ingest.yml` manually once (Actions → Nightly ingest → Run
