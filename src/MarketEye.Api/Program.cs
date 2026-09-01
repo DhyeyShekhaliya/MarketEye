@@ -47,8 +47,22 @@ if (app.Environment.IsDevelopment())
     // across scaled-out instances and gives no rollback path.
     // Migrations stay Development-only. Production applies them out of band, because startup
     // migration races across scaled-out instances and offers no rollback (docs/adr/0006).
-    using var scope = app.Services.CreateScope();
-    await scope.ServiceProvider.GetRequiredService<MarketEyeDbContext>().Database.MigrateAsync();
+    //
+    // Wrapped so an unreachable database cannot kill the process. Crashing here produces a dead
+    // app with no HTTP surface, which is strictly worse than a running app whose /health explains
+    // the problem -- and it is what made the first Azure deployment so hard to diagnose.
+    try
+    {
+        using var scope = app.Services.CreateScope();
+        await scope.ServiceProvider.GetRequiredService<MarketEyeDbContext>().Database.MigrateAsync();
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(
+            $"STARTUP WARNING: migrations did not run: {ex.Message}\n" +
+            "The app will start; /health will report the database as unhealthy. " +
+            "If you are pointing at a database that is already migrated, this is safe to ignore.");
+    }
 }
 
 // The vocabulary seeds in EVERY environment, unlike migrations.
