@@ -1,0 +1,31 @@
+# Local development stack for Sift (PLAN.md §10, Phase 0).
+#
+# The SA password is read from .env so this file is safe to commit and works
+# for anyone who clones the repo. Copy .env.example to .env before first run.
+services:
+  sql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: sift-sql-compose
+    # There is no arm64 SQL Server image. Pinning the platform makes the
+    # emulation explicit on Apple Silicon instead of leaving the pull ambiguous.
+    platform: linux/amd64
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:?set MSSQL_SA_PASSWORD in .env}
+      MSSQL_PID: Developer
+    ports:
+      - "${MSSQL_PORT:-1433}:1433"
+    volumes:
+      - sqldata:/var/opt/mssql
+    healthcheck:
+      # Queries as sa rather than checking the port: SQL Server accepts TCP
+      # connections shortly before the sa login is ready, and under emulation
+      # that window is wide enough to hand the API a "Login failed" on startup.
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+volumes:
+  sqldata:

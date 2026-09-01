@@ -9,8 +9,8 @@ Resolved 2026-09-01 on macOS 15.7.9 / arm64.
 
 | Item | Version | Location |
 |---|---|---|
-| .NET SDK | 9.0.317 | `~/.dotnet` (via `dotnet-install.sh`, no sudo) |
-| `dotnet-ef` | 9.0.19 | `~/.dotnet/tools` — pinned to 9.x; the default 10.x needs a .NET 10 runtime |
+| .NET SDK | **10.0.400** (9.0.317 kept side by side) | `~/.dotnet` (via `dotnet-install.sh`, no sudo) |
+| `dotnet-ef` | 10.0.11 | `~/.dotnet/tools` — the earlier 9.x pin existed only because no .NET 10 runtime was installed |
 | Docker Desktop | 4.89.0 (engine 29.7.2) | `/Applications/Docker.app`, CLI via `~/.docker/bin` |
 | Docker Compose | v5.5.0 | bundled cli-plugin |
 | `mcr.microsoft.com/mssql/server` | 2022-latest (CU26, 16.0.4265.3) | pulled `linux/amd64`, 2.34 GB on disk |
@@ -86,7 +86,7 @@ Microsoft.EntityFrameworkCore.SqlServer 9.0.19, Dapper 2.1.79.
 
 ## Things to know before Phase 0
 
-**Logging.Abstractions is split 9.x / 10.x.** `OpenAI` 2.13.0 → `System.ClientModel` 1.14.0 →
+**Logging.Abstractions was split 9.x / 10.x — now resolved by targeting net10.0.** `OpenAI` 2.13.0 → `System.ClientModel` 1.14.0 →
 `Microsoft.Extensions.Logging.Abstractions >= 10.0.3`. Pinning `Sift.Ai` to 9.x is a hard NU1605
 downgrade error, not a warning. Either let `Sift.Ai` take 10.x (done here) or move the whole
 solution to the 10.x Extensions line. Central Package Management would make this one decision
@@ -96,9 +96,14 @@ instead of nine.
 commercial use. 7.2.2 is the last Apache-2.0 release. If that licence is unacceptable even at 7.x,
 AwesomeAssertions (a 7.x fork) and Shouldly are drop-in-ish alternatives.
 
-**.NET 9 is past end of support** (STS, ended May 2026). PLAN.md §3 specifies it, so that is what
-is installed. Moving to .NET 10 LTS is a §3 amendment, not a scaffolding decision — but the
-`Sift.Ai` conflict above is the first sign of the ecosystem moving on.
+**Resolved: the solution now targets .NET 10 LTS.** §3 was amended in Phase 0 — see
+`docs/adr/0003`. All `Microsoft.Extensions.*`, EF Core and ASP.NET Core packages are on 10.x, so
+the split described above no longer exists.
+
+*Correction to an earlier statement in this file: .NET 9 was described as having reached end of
+support in May 2026. That was wrong. It is STS in maintenance with EOL 2026-11-10. The move to
+.NET 10 was still correct — for the `NU1605` dependency reason above, and because 9 goes EOL
+inside this project's own 3–5 month timeline — but the support date as first stated was inaccurate.*
 
 **The default Docker socket is enabled** (`EnableDefaultDockerSocket: true`), so
 `/var/run/docker.sock` exists as a symlink to `~/.docker/run/docker.sock`. Testcontainers finds it
@@ -122,12 +127,12 @@ own throwaway containers — so this is for the app, EF migrations, and manual i
 
 | | |
 |---|---|
-| Container | `sift-sql` |
+| Container | `sift-sql-compose` (managed by `docker-compose.yml`) |
 | Image | `mcr.microsoft.com/mssql/server:2022-latest`, `linux/amd64` |
 | Edition | Developer (§3) |
 | Port | `localhost,1433` |
-| Volume | `sift-sqldata` → `/var/opt/mssql` (survives restarts) |
-| Restart policy | `unless-stopped` |
+| Volume | `netproject_sqldata` → `/var/opt/mssql` (survives restarts) |
+| Database | `Sift` (created by EF migrations) |
 
 ```
 Server=localhost,1433;User Id=sa;Password=Sift_Dev_Local_2026!;TrustServerCertificate=True;Encrypt=True
@@ -141,14 +146,16 @@ should read the password from a `.env` file or user-secrets rather than inlining
 compose file works for anyone. `TrustServerCertificate=True` is required because the container uses
 a self-signed cert — do not carry that flag into the Azure SQL connection string.
 
-Recreate it with:
+Start it with:
 
 ```bash
-docker run -d --name sift-sql --platform linux/amd64 \
-  -e ACCEPT_EULA=Y -e 'MSSQL_SA_PASSWORD=Sift_Dev_Local_2026!' -e MSSQL_PID=Developer \
-  -p 1433:1433 -v sift-sqldata:/var/opt/mssql --restart unless-stopped \
-  mcr.microsoft.com/mssql/server:2022-latest
+cp .env.example .env
+docker compose up -d
 ```
+
+The bootstrap `sift-sql` container created during setup has been removed; `docker-compose.yml`
+supersedes it. Running both would bind-conflict on 1433 and invites connecting to the wrong
+database.
 
 ## Verified end to end
 
@@ -167,6 +174,21 @@ Two transient `Login failed for user 'sa'` failures occurred on the first runs a
 pull, then never recurred across five clean runs. SQL Server can accept TCP connections shortly
 before the `sa` login is ready, and emulated startup widens that window. If it resurfaces in CI,
 the fix is a wait strategy on a successful `sa` query, not a retry count.
+
+### .NET 10 test-runner change
+
+The .NET 10 SDK **dropped VSTest support** in Microsoft.Testing.Platform, which is what xUnit v3
+runs on. `dotnet test` fails outright until the runner is selected in `global.json`:
+
+```json
+"test": { "runner": "Microsoft.Testing.Platform" }
+```
+
+`Microsoft.NET.Test.Sdk` and `xunit.runner.visualstudio` were removed from all four test projects
+for the same reason — they are the VSTest path.
+
+`<InvariantGlobalization>true</InvariantGlobalization>` must also stay **false**:
+`Microsoft.Data.SqlClient` does not support invariant mode and throws at connection time.
 
 ### API notes for §8
 

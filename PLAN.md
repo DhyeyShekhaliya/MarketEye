@@ -100,7 +100,7 @@ Sift.sln
 
 | Layer | Choice | Why |
 |---|---|---|
-| Backend | ASP.NET Core Web API (.NET 9) | — |
+| Backend | ASP.NET Core Web API (**.NET 10 LTS**) | Amended in revision 3 — was .NET 9. See `docs/adr/0003` |
 | Frontend | Blazor Server | Fast to build. Know the tradeoff: a persistent circuit per visitor, which is a real hosting cost at scale |
 | Database | **SQL Server** (Developer Edition locally) | Temporal tables + columnstore — see §4 |
 | ORM | EF Core for CRUD/config; **Dapper + SqlBulkCopy for the hot path** | EF is too slow for millions of daily bars |
@@ -474,6 +474,11 @@ Each phase ends **deployed, tested, and green in CI** before the next begins.
 
 **Exit:** `docker compose up` gives a running API on a live DB, green CI.
 
+> **Status: complete except CI.** The scaffold, compose stack, temporal schema slice, health check,
+> Serilog, provider stub and test projects are done and verified. GitHub Actions was deliberately
+> deferred (revision 3), so "green CI" remains outstanding and should be closed before Phase 1
+> ships rather than at the end of it.
+
 ### Phase 1 — Data pipeline + screener (~4–6 weeks) ← the part most people never finish
 - [ ] **Historical backfill strategy solved first** (see §12) — this blocks everything
 - [ ] Provider client: rate limiting, exponential backoff, idempotent re-runs
@@ -577,6 +582,16 @@ Follow immediately with the §9 measured benchmark table.
 ---
 
 ## 14. Revision log & rejected changes
+
+### Adopted in revision 3
+- **.NET 10 LTS replaces .NET 9 in §3.** Not a version-chasing change: `OpenAI` 2.13.0 →
+  `System.ClientModel` 1.14.0 requires `Microsoft.Extensions.Logging.Abstractions >= 10.0.3`,
+  which made `Sift.Ai` unresolvable on the 9.x line (hard `NU1605`, not a warning). .NET 9 is also
+  EOL 2026-11-10, inside this project's own 3–5 month timeline. See `docs/adr/0003`.
+- **Central Package Management adopted** so a future framework-line move is one edit, not eleven.
+- **Phase 0 CI deferred.** Phase 0 was completed with `git init` and a GitHub remote but *without*
+  the GitHub Actions workflow, so its "green CI" exit criterion is unmet by decision, not oversight.
+  Tracked in §10.
 
 ### Adopted in revision 2
 Explicit backtest semantics (§7) · transaction costs and slippage with visible assumptions (§7) ·

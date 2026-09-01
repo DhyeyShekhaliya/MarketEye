@@ -1,0 +1,49 @@
+<!--
+  Central Package Management: one version per package for the whole solution.
+
+  Adopted in Phase 0 because setup hit a hard NU1605 downgrade ERROR when the
+  OpenAI SDK pulled Microsoft.Extensions.Logging.Abstractions >= 10.0.3 into
+  Sift.Ai while every other project sat on 9.x. With CPM that class of conflict
+  is one edit here instead of eleven csproj edits.
+-->
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Data.SqlClient" Version="6.1.6" />
+    <PackageVersion Include="Dapper" Version="2.1.79" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.11" />
+    <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.9.0" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Hybrid" Version="10.9.0" />
+    <PackageVersion Include="System.Threading.RateLimiting" Version="10.0.11" />
+    <PackageVersion Include="Azure.AI.OpenAI" Version="2.1.0" />
+    <PackageVersion Include="OpenAI" Version="2.13.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
+    <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageVersion Include="Serilog.Sinks.Console" Version="6.1.1" />
+    <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
+    <PackageVersion Include="Serilog.Settings.Configuration" Version="10.0.1" />
+    <PackageVersion Include="Microsoft.ApplicationInsights.AspNetCore" Version="2.23.0" />
+    <!-- No 10.x release yet; 9.0.0 targets netstandard and works on net10.0. -->
+    <PackageVersion Include="AspNetCore.HealthChecks.SqlServer" Version="9.0.0" />
+    <!-- xUnit v3 runs on Microsoft.Testing.Platform, selected in global.json.
+         Microsoft.NET.Test.Sdk and xunit.runner.visualstudio are deliberately absent:
+         they are the VSTest path, which the .NET 10 SDK no longer supports. -->
+    <PackageVersion Include="xunit.v3" Version="4.0.0" />
+    <!-- PINNED TO 7.x DELIBERATELY. FluentAssertions 8+ moved to a paid Xceed
+         licence for commercial use; 7.2.2 is the last Apache-2.0 release.
+         Do not bump this to 8 or later without a licence decision.
+         Free alternatives if that decision goes the other way: AwesomeAssertions, Shouldly. -->
+    <PackageVersion Include="FluentAssertions" Version="7.2.2" />
+    <PackageVersion Include="NSubstitute" Version="5.3.0" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="Testcontainers.MsSql" Version="4.14.0" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,36 @@
+<Project>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+
+    <!-- A warning that is allowed to persist becomes noise, and noise hides the
+         warning that matters. PLAN.md §8 depends on the compiler being trusted. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
+    <!-- NU1605 (package downgrade) is an error by default and must stay one:
+         it is what caught the OpenAI SDK pulling Extensions 10.x during setup. -->
+    <WarningsNotAsErrors></WarningsNotAsErrors>
+
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- Must stay false: Microsoft.Data.SqlClient does not support globalization
+         invariant mode and throws at connection time. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!-- Test projects: never packed, and xUnit v3 runs as its own executable. -->
+  <PropertyGroup Condition="$(MSBuildProjectName.EndsWith('Tests')) or $(MSBuildProjectName.EndsWith('Evals'))">
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+
+    <!-- .NET 10 SDK dropped VSTest support in Microsoft.Testing.Platform, which is what
+         xUnit v3 runs on. Without this opt-in, 'dotnet test' fails outright. -->
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+    <UseVSTest>false</UseVSTest>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,12 @@
+[
+  {
+    "fiscalPeriodEnd": "2024-03-31", "reportedDate": "2024-05-02",
+    "revenue": 1250000.00, "netIncome": 180000.00,
+    "totalDebt": 400000.00, "shareholdersEquity": 900000.00
+  },
+  {
+    "fiscalPeriodEnd": "2024-06-30", "reportedDate": "2024-08-01",
+    "revenue": 1310000.00, "netIncome": 195000.00,
+    "totalDebt": 380000.00, "shareholdersEquity": 960000.00
+  }
+]

@@ -1,0 +1,17 @@
+[
+  {
+    "providerSecurityId": "FIX-0001", "ticker": "AAA", "name": "Alpha Industries",
+    "exchange": "NYSE", "sector": "Industrials", "industry": "Machinery",
+    "isActive": true, "delistedDate": null, "delistingReason": null
+  },
+  {
+    "providerSecurityId": "FIX-0002", "ticker": "BBB", "name": "Beta Software",
+    "exchange": "NASDAQ", "sector": "Technology", "industry": "Software",
+    "isActive": true, "delistedDate": null, "delistingReason": null
+  },
+  {
+    "providerSecurityId": "FIX-0003", "ticker": "CCC", "name": "Gamma Retail",
+    "exchange": "NYSE", "sector": "Consumer Discretionary", "industry": "Retail",
+    "isActive": false, "delistedDate": "2024-06-28", "delistingReason": "Bankruptcy"
+  }
+]
