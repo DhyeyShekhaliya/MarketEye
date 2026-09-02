@@ -11,9 +11,11 @@ using MarketEye.Infrastructure.MarketData.IndianApi;
 using MarketEye.Infrastructure.Persistence;
 using MarketEye.Infrastructure.Persistence.TypeHandlers;
 using MarketEye.Infrastructure.Screening;
+using MarketEye.Application.Ai;
 using MarketEye.Application.Screening;
 using MarketEye.Domain.Screening;
 using MarketEye.Domain.Screening.Vocabulary;
+using MarketEye.Infrastructure.Ai;
 
 namespace MarketEye.Infrastructure.DependencyInjection;
 
@@ -120,13 +122,48 @@ public static class InfrastructureServiceCollectionExtensions
                 .LoadAsync(sp.GetRequiredService<MarketEyeDbContext>(), CancellationToken.None)
                 .GetAwaiter().GetResult());
 
+        // Per scope for the same reason, and per scope rather than cached across requests for one
+        // more: §5.2 lets a user edit a definition at runtime, so a singleton would keep serving
+        // the old meaning of "cheap" until the process restarted.
+        services.AddScoped<IStrategyConceptVocabulary>(sp =>
+            DbStrategyConceptVocabulary
+                .LoadAsync(sp.GetRequiredService<MarketEyeDbContext>(), CancellationToken.None)
+                .GetAwaiter().GetResult());
+
         services.AddScoped<ScreenCriteriaValidator>();
+        services.AddScoped<StrategyConceptValidator>();
+        services.AddScoped<IntentResolver>();
+        services.AddScoped<CriteriaExplainer>();
+        services.AddScoped<Vocabulary.StrategyConceptStore>();
+        services.AddScoped<SavedStrategyStore>();
         services.AddScoped<CriteriaCompiler>();
         services.AddScoped(sp => new ScreeningEngine(
             sp.GetRequiredService<MarketEyeDbContext>(),
             sp.GetRequiredService<CriteriaCompiler>(),
             sp.GetRequiredService<ScreenCriteriaValidator>(),
             cs));
+
+        // In-memory only, no Redis (§3). Backs both ParseCache (via IntentTranslationService) and
+        // ScreenResultCache (via CachedScreeningEngine) (§5.5).
+        services.AddHybridCache();
+
+        // The decorator API endpoints call. ScreeningEngine itself stays registered and
+        // cache-free above -- Phase 3's backtester needs the uncached path, since a backtest
+        // replays many distinct historical dates that would each be a one-time cache key anyway.
+        services.AddScoped<CachedScreeningEngine>();
+
+        // IIntentParser is registered by MarketEye.Ai's own AddMarketEyeAi (Program.cs calls both
+        // extensions before Build()), never referenced here by name -- this factory only takes the
+        // Application-layer interface, keeping the Ai project's own implementations unreachable
+        // from Infrastructure.
+        services.AddScoped(sp => new IntentTranslationService(
+            sp.GetRequiredService<IIntentParser>(),
+            sp.GetRequiredService<IntentResolver>(),
+            sp.GetRequiredService<IStrategyConceptVocabulary>(),
+            sp.GetRequiredService<Microsoft.Extensions.Caching.Hybrid.HybridCache>(),
+            sp.GetRequiredService<MarketData.RequestBudget>(),
+            config.GetValue("Ai:DailyCallCap", 200),
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger<IntentTranslationService>()));
 
         return services;
     }

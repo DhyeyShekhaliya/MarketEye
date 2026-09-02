@@ -7,6 +7,7 @@ using MarketEye.Domain.Entities;
 using MarketEye.Domain.Screening;
 using MarketEye.Infrastructure.Ingestion;
 using MarketEye.Infrastructure.Persistence;
+using MarketEye.Infrastructure.Persistence.TypeHandlers;
 using MarketEye.Infrastructure.Screening;
 using Testcontainers.MsSql;
 using Xunit;
@@ -31,6 +32,14 @@ public class ScreeningPipelineTests : IAsyncLifetime
     public async ValueTask InitializeAsync()
     {
         if (!DockerGate.Enabled) return;
+
+        // Production registers these inside AddMarketEyeInfrastructure, but this test builds the
+        // ScreeningEngine by hand to keep the DI container out of a persistence test. That means
+        // the Dapper handlers have to be registered explicitly: ScreenRow.PriceDate is a DateOnly,
+        // and without the handler Dapper cannot materialise the row at all. Register() is
+        // idempotent (see DateOnlyTypeHandlerTests).
+        DapperTypeHandlers.Register();
+
         await _sql.StartAsync(TestContext.Current.CancellationToken);
         _cs = _sql.GetConnectionString();
 
@@ -38,6 +47,7 @@ public class ScreeningPipelineTests : IAsyncLifetime
             new DbContextOptionsBuilder<MarketEyeDbContext>().UseSqlServer(_cs).Options);
         await _db.Database.MigrateAsync(TestContext.Current.CancellationToken);
         await MetricConceptSeed.SeedAsync(_db, TestContext.Current.CancellationToken);
+        await StrategyConceptSeed.SeedAsync(_db, TestContext.Current.CancellationToken);
     }
 
     public async ValueTask DisposeAsync()

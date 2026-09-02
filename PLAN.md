@@ -260,6 +260,15 @@ own screen:
 Schema: `Name`, `Aliases[]`, `Description`, `DefinitionJson` (a `ScreenCriteria` fragment), `IsEnabled`,
 `IsSystem`, `OwnerUserId`.
 
+> **Deviation, implemented in Phase 2.** This single-table schema is not what got built. Phase 1
+> had already shipped a `MetricConcepts` table doing the compiler's column-whitelist job, and
+> collapsing that into one user-editable table with the Strategy Vocabulary above would make the
+> row a user edits in a text box the same row that becomes a SQL identifier. What exists instead is
+> two tables: `MetricConcepts` stays system-owned and sealed (`ColumnName` → SQL), and a new
+> `StrategyConcepts` table carries exactly this schema and is what the model's `concepts[]` names
+> resolve against. See `docs/adr/0007`, which also argues the vocabulary-derived strict output
+> schema, fail-closed resolution, and the override rule this split makes possible.
+
 This is what the project actually is:
 
 > **An LLM-powered natural-language interface to a controlled financial DSL.**
@@ -572,15 +581,42 @@ verified against a hand-checked sample of 20 securities.
 > five-year claim should see it here rather than infer it from the deployed data.
 
 ### Phase 2 — Intent translation (~2–3 weeks)
-- [ ] `MetricConcepts` seeded with ~20 concepts + Strategy Vocabulary screen
-- [ ] LLM parse to concepts + explicit filters, strict structured output
-- [ ] Concept resolution + domain validation
-- [ ] Interpretation panel with edit-definition (§5.3)
-- [ ] Rate limiter (§5.4), `ParseCache`, `ScreenResultCache`
-- [ ] **Saved strategies** — core workflow, not polish
+- [x] `StrategyConcepts` seeded with 18 concepts (two-table split, `docs/adr/0007`) + Strategy
+      Vocabulary screen (`/vocabulary`)
+- [x] LLM parse to concepts + explicit filters, strict structured output — NVIDIA NIM
+      (`openai/gpt-oss-20b`), with a deterministic keyword `StubIntentParser` fallback when no key
+      is configured
+- [x] Concept resolution + domain validation (`IntentResolver`, fail-closed, §5.1)
+- [x] Interpretation panel with edit-definition (§5.3), on `/screen`
+- [x] Rate limiter (§5.4), `ParseCache` (`IntentTranslationService` + `HybridCache`),
+      `ScreenResultCache` (`CachedScreeningEngine`, wired into `/api/screen`)
+- [x] **Saved strategies** — core workflow, not polish (`/api/strategies`, `/strategies`)
 - [ ] `MarketEye.AiEvals` 50 cases wired into CI as a gate
 
 **Exit:** ≥85% eval, unknown concepts fail closed, a failed parse asks a question.
+
+> **Exit status, honestly.**
+>
+> | Criterion | State |
+> |---|---|
+> | Unknown concepts fail closed | **Met.** `IntentResolver` rejects a concept absent from, or disabled in, the vocabulary — never a nearest match. Covered by unit tests and, structurally, by the vocabulary-derived enum schema (`IntentJsonSchema`) that makes an unknown name unemittable in the first place |
+> | A failed parse asks a question | **Met.** A vague or ambiguous prompt returns `clarification` rather than a guessed screen (§5.6); the panel renders it and refocuses the prompt box |
+> | ≥85% eval, gated in CI | **Not yet met.** `MarketEye.AiEvals` is under active development — the offline/live two-tier structure exists, but the 50 cases, recorded fixtures, and the `ai-evals.yml` workflow are not complete as of this writing. Tracked here rather than claimed done |
+>
+> Everything else in the Phase 2 task list above is built, builds clean under
+> `TreatWarningsAsErrors=true`, and is covered by the unit and container-backed integration suites
+> (267 tests total: 231 unit, 25 integration under `MARKETEYE_INTEGRATION=1`, 11 backtest scaffolding
+> — see `README.md`). Saved strategies in particular is exercised end to end against a real SQL
+> Server: create, rename-collision, delete, and criteria-validation-before-storage are all
+> integration-tested, not just unit-tested against a mock.
+>
+> **A provider deviation, deliberately.** §5.4's plan called for Ollama locally and GitHub Models
+> when deployed. What is built instead is a single NVIDIA NIM provider
+> (`openai/gpt-oss-20b`, verified live on 2026-09-02 to honour strict `response_format` schema
+> output, ask a clarifying question rather than guess, and refuse a prompt-injection attempt without
+> breaking schema conformance) plus the `StubIntentParser` keyword fallback used when no API key is
+> configured. `IIntentParser` stays the seam either way — swapping in Ollama or another
+> OpenAI-compatible host later is a config and DI change, not a rewrite.
 
 ### Phase 3 — Backtesting (~4–6 weeks) ← the differentiator
 - [ ] `BacktestDefinition` (§7) implemented exactly as specified
@@ -703,3 +739,11 @@ moved to Phase 2 · realistic timeline (§10) · backfill and licensing risks (�
       so §9 is not measurable as written and must be restated before any number is published.
 - [ ] Auth — ASP.NET Core Identity (simpler, sufficient) vs. Entra ID.
 - [ ] Multi-user from Phase 2, or single-user until Phase 4?
+- [ ] **The DSL cannot express field-to-field comparison.** `Comparison` (§6, `FilterNode.cs`)
+      compares a field to a decimal literal only, so a concept like "uptrend" (`Close > Sma200`)
+      is unseedable in the Phase 2 Strategy Vocabulary — there is no `PriceToSma200`-style ratio
+      column to compare against a literal instead. Expressing it needs that ratio computed and
+      stored at ingest (§4.3), which is Phase 1 ingestion work plus a full historical recompute, not
+      something Phase 2 can add on the side. Trend concepts are deliberately left out of the seed
+      (`StrategyConceptSeed`) and out of the eval cases (`MarketEye.AiEvals`) for this reason —
+      recorded here rather than worked around with an unseeded, silently-broken concept name.

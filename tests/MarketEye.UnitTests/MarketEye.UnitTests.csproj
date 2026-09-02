@@ -4,6 +4,7 @@
     <ProjectReference Include="..\..\src\MarketEye.Domain\MarketEye.Domain.csproj" />
     <ProjectReference Include="..\..\src\MarketEye.Application\MarketEye.Application.csproj" />
     <ProjectReference Include="..\..\src\MarketEye.Infrastructure\MarketEye.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\MarketEye.Ai\MarketEye.Ai.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

@@ -1,4 +1,53 @@
-.lede { color: #555; max-width: 60ch; }
+.lede { color: #555; max-width: 66ch; }
+.hint { color: #777; font-size: .85rem; }
+
+/* --- Natural-language box --------------------------------------------------------------- */
+.nl-box { margin: 1rem 0 1.5rem; }
+.nl-box label { display: block; font-weight: 600; margin-bottom: .3rem; }
+.nl-row { display: flex; gap: .5rem; }
+.nl-input { flex: 1 1 auto; padding: .5rem .7rem; font-size: 1rem; }
+.nl-box .hint { display: block; margin-top: .3rem; }
+
+.clarification { padding: .7rem .9rem; border-radius: 4px; margin: 1rem 0;
+                  background: #f5f8ff; border: 1px solid #c9d9f7; color: #24406e; }
+.clarification p { margin: .3rem 0 0; }
+
+/* --- Interpretation panel (§5.3) -------------------------------------------------------- */
+.panel { margin: 1rem 0 1.5rem; padding: 1rem 1.25rem; border: 1px solid #ddd; border-radius: 6px;
+         background: #fcfcfc; }
+.panel h2 { margin-top: 0; font-size: 1.05rem; }
+.panel-prompt { color: #777; font-style: italic; margin-bottom: .5rem; }
+
+.concept-row { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+               gap: .5rem; padding: .5rem 0; border-bottom: 1px solid #eee; }
+.concept-row:last-of-type { border-bottom: none; }
+.concept-main { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+.concept-main .arrow { color: #999; }
+.concept-main .definition { font-variant-numeric: tabular-nums; color: #333; }
+.concept-actions { display: flex; gap: .6rem; white-space: nowrap; }
+.concept-actions .link:last-child { font-size: 1.1rem; line-height: 1; color: #a33; }
+
+.override-note { flex-basis: 100%; color: #8a6d1f; font-size: .82rem; }
+
+.badge { display: inline-block; margin-left: .4rem; padding: 0 .35rem; border-radius: 3px;
+         background: #eef1f5; color: #556; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; }
+
+.provenance { color: #777; font-size: .85rem; margin: .8rem 0 0; }
+.provenance a { margin-left: .5rem; }
+
+.save-strategy { display: flex; gap: .5rem; align-items: center; margin-top: .75rem; }
+.save-strategy input { padding: .35rem .5rem; }
+.save-strategy input[type="text"]:first-of-type { width: 12rem; }
+.save-strategy input[type="text"]:nth-of-type(2) { width: 18rem; }
+.error-inline { color: #8a1f1f; font-size: .85rem; }
+
+/* --- Inline concept editor, and the manual builder ---------------------------------------- */
+.editor { margin: 1rem 0 1.5rem; padding: 1rem; border: 1px solid #ddd; border-radius: 6px; background: #fcfcfc; }
+.editor h2 { margin-top: 0; }
+
+details.manual { margin: 1.5rem 0; }
+details.manual summary { cursor: pointer; font-weight: 600; color: #444; }
+details.manual > *:not(summary) { margin-top: .75rem; }
 
 .filter-row { display: flex; gap: .5rem; align-items: center; margin-bottom: .5rem; }
 .filter-row select, .filter-row input { padding: .35rem .5rem; }
@@ -7,7 +56,6 @@
 .actions { display: flex; gap: .75rem; align-items: center; margin: 1rem 0; }
 .actions button { padding: .4rem .9rem; }
 .actions .primary { font-weight: 600; }
-.hint { color: #777; font-size: .85rem; }
 
 .result-meta { color: #555; font-size: .9rem; margin: 1rem 0 .5rem; }
 
@@ -16,6 +64,4 @@ table.results th, table.results td { border-bottom: 1px solid #e3e3e3; padding: 
 table.results th { background: #fafafa; }
 table.results .num { text-align: right; font-variant-numeric: tabular-nums; }
 
-.error, .notice { padding: .6rem .8rem; border-radius: 4px; margin: 1rem 0; }
-.error { background: #fdf0f0; border: 1px solid #f0c4c4; color: #8a1f1f; }
-.notice { background: #f7f7f7; border: 1px solid #ddd; color: #444; }
+.notice { padding: .6rem .8rem; border-radius: 4px; margin: 1rem 0; background: #f7f7f7; border: 1px solid #ddd; color: #444; }

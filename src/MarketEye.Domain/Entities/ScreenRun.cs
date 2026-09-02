@@ -19,4 +19,12 @@ public class ScreenRun
     public DateTimeOffset RunAt { get; set; }
     public int ResultCount { get; set; }
     public int DurationMs { get; set; }
+
+    /// <summary>
+    /// True when this run was answered from ScreenResultCache (§5.5) rather than executed.
+    /// ScreeningEngine writes a row per execution; without this flag a cache hit would skip the
+    /// write entirely and quietly understate how often a screen actually runs. DurationMs is 0 on
+    /// a cache hit -- there was no query to time.
+    /// </summary>
+    public bool FromCache { get; set; }
 }

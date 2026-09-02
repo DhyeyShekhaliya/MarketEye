@@ -1,0 +1,28 @@
+.lede { color: #555; max-width: 66ch; }
+.hint { color: #777; font-size: .85rem; max-width: 66ch; }
+
+table.vocab { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+table.vocab th, table.vocab td { border-bottom: 1px solid #e3e3e3; padding: .5rem .6rem; text-align: left; vertical-align: top; }
+table.vocab th { background: #fafafa; }
+table.vocab .centre { text-align: center; }
+table.vocab tr.disabled { color: #999; }
+table.vocab tr.disabled .definition { text-decoration: line-through; }
+
+.definition { font-variant-numeric: tabular-nums; }
+.aliases { color: #777; font-size: .85rem; }
+.desc { color: #777; font-size: .85rem; margin-top: .15rem; max-width: 40ch; }
+
+.badge { display: inline-block; margin-left: .4rem; padding: 0 .35rem; border-radius: 3px;
+         background: #eef1f5; color: #556; font-size: .7rem; text-transform: uppercase; letter-spacing: .04em; }
+
+.editor { margin-top: 1.5rem; padding: 1rem; border: 1px solid #ddd; border-radius: 6px; background: #fcfcfc; }
+.editor h2 { margin-top: 0; }
+
+.filter-row { display: flex; gap: .5rem; align-items: center; margin-bottom: .5rem; }
+.filter-row select, .filter-row input { padding: .35rem .5rem; }
+.filter-row input { width: 10rem; }
+
+.actions { display: flex; gap: .75rem; align-items: center; margin: 1rem 0 0; }
+.actions button { padding: .4rem .9rem; }
+.actions .primary { font-weight: 600; }
+

@@ -3,7 +3,8 @@
 # Container-backed integration tests are NOT run: they start real SQL Server instances, and on
 # Apple Silicon those run emulated at ~2 GB each. They are opt-in behind MARKETEYE_INTEGRATION=1.
 # Enabling them on CI is reasonable later -- GitHub runners are amd64, so no emulation -- but that
-# is a deliberate choice rather than a default.
+# is a deliberate choice rather than a default. The projects still run here; their container-backed
+# tests report as skipped.
 name: CI
 
 on:
@@ -28,5 +29,24 @@ jobs:
       - name: Build
         run: dotnet build MarketEye.sln -c Release --no-restore
 
+      # Each test project is executed directly rather than through `dotnet test`.
+      #
+      # xunit.v3 4.0.0 runs on Microsoft.Testing.Platform *v2*, and the .NET 10 SDK's `dotnet test`
+      # integration speaks MTP v1. The handshake fails silently in the worst possible way: every
+      # project reports "Zero tests ran" and exits 5, so the step goes red while looking like a
+      # tooling error rather than a test failure -- and had it exited 0, CI would have been green
+      # while running nothing at all.
+      #
+      # MTP test projects are self-executing by design, so running them is the supported path and
+      # exit codes propagate normally. Revisit if a future SDK aligns on MTP v2.
       - name: Test
-        run: dotnet test MarketEye.sln -c Release --no-build
+        run: |
+          for project in \
+            tests/MarketEye.UnitTests \
+            tests/MarketEye.IntegrationTests \
+            tests/MarketEye.BacktestTests
+          do
+            echo "::group::$project"
+            dotnet run --project "$project" -c Release --no-build
+            echo "::endgroup::"
+          done

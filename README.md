@@ -33,29 +33,56 @@
 
 The model sits at the edge of the system, not the middle. It reads prose and emits *concept names*
 plus any number the user stated themselves. It never emits SQL, and it never invents a financial
-threshold — "cheap" resolves from a `MetricConcepts` table you can inspect and edit, not from the
-model's opinion. A concept the model returns that is not in that table is a hard validation
-failure, never a silent fallback.
+threshold — "cheap" resolves from a Strategy Vocabulary table you can inspect and edit at
+`/vocabulary`, not from the model's opinion. A concept the model returns that is not in that table
+is a hard validation failure, never a silent fallback. (Two tables sit behind this, one system-owned
+and one yours to edit — `docs/adr/0007` argues why.)
 
 Everything downstream of the validator is deterministic. The model can be swapped, removed, or fail
 entirely and the screening and backtesting engines still work.
 
 ## Status
 
-**Phase 1 complete.** The data pipeline and screener work end to end: ~2.5M daily bars across
-3,481 NSE securities, pre-computed indicators, fundamentals in a temporal table, a validated
-screening DSL, and a deployed API.
+**Phase 2 in progress.** The prompt → criteria → results flow described above genuinely works now:
+type a strategy in plain English, confirm the interpreted criteria against your own Strategy
+Vocabulary, and run it. Backtesting (Phase 3) has not started, so the CAGR/Sharpe/drawdown figures
+in the block above remain illustrative.
 
 | Phase | State |
 |---|---|
 | 0 — Foundation | Complete |
 | 1 — Data pipeline + screener | Complete, with three qualified exit criteria (below) |
-| 2 — Intent translation | Not started |
+| 2 — Intent translation | In progress — screening flow complete; the `MarketEye.AiEvals` ≥85% CI gate is not yet wired up (below) |
 | 3 — Backtesting | Not started |
 | 4 — Polish | Not started |
 
-There is no AI yet, by design: `PLAN.md` §10 builds the foundation before the flashy part, because
-the foundation is what makes the rest credible.
+`PLAN.md` §10 builds the foundation before the flashy part on purpose, because the foundation is
+what makes the rest credible — Phase 2 is where that argument gets tested for real.
+
+### What Phase 2 delivers
+
+- **A prompt turns into criteria, never SQL.** The model (§5.1) emits *concept names* — `cheap`,
+  `profitable`, `small_cap` — plus a numeric filter only where you stated the number yourself.
+  "Cheap" resolving to `P/E < 25 AND P/B < 3` comes from a table you can read and edit, not from
+  the model's opinion, and a concept the model names that isn't in that table is a hard failure,
+  never a substitution
+- **Strategy Vocabulary** (`/vocabulary`) — 18 seeded concepts, India-calibrated, each editable or
+  disableable without a deploy. Two tables under the hood, `MetricConcepts` (system, sealed) and
+  `StrategyConcepts` (yours to edit) — `docs/adr/0007` argues why they're split rather than one
+- **Interpretation panel** (`/screen`) — confirm-before-run: every resolved concept, its
+  definition, and any place your own number overrode the vocabulary's default, rendered before
+  anything executes. Nothing runs from an unconfirmed parse
+- **Fails closed, asks rather than guesses.** An unknown or disabled concept is rejected, never a
+  nearest match. A vague prompt ("good stocks") returns a clarifying question instead of a screen
+  over the whole universe
+- **Saved strategies** (`/strategies`, `/api/strategies`) — stores the resolved criteria, not the
+  prompt, so a saved strategy reproduces exactly even if the vocabulary changes later
+- **Two-level caching and rate limiting** (§5.4, §5.5) — 10 parses/min and 100/day per caller,
+  repeated prompts and repeated screens both served from cache, with a database-backed daily call
+  cap as the real protection against burning through a finite LLM credit allotment
+- **Runs with no AI configured at all.** No `Ai:ApiKey` set means natural-language parsing falls
+  back to a deterministic keyword parser — the manual filter builder and the whole rest of the app
+  are unaffected, proving §2's claim that the model can be removed and the system below still works
 
 ### What Phase 1 actually delivered
 
@@ -95,6 +122,19 @@ Each of these is a property of the data source rather than a bug, and each is ar
 - **Roughly half the securities carry synthetic identifiers** where no ISIN was recoverable from
   the archive. Ticker-change reconciliation cannot work for those.
 
+### Phase 2 — what's not done yet
+
+One of `PLAN.md` §10's Phase 2 criteria is not met:
+
+| Criterion | Status |
+|---|---|
+| Unknown concepts fail closed | **Met** — verified by unit tests and by construction: the model's output schema only enumerates concepts that currently exist in the vocabulary |
+| A failed parse asks a question | **Met** — a vague or ambiguous prompt returns a clarifying question, never a guessed screen |
+| `MarketEye.AiEvals` ≥85% eval, gated in CI | **Not yet.** The two-tier offline/live suite structure exists but the 50 cases and recorded fixtures are not complete, so there is no CI gate yet |
+
+Also **the DSL cannot express field-to-field comparisons** (`Close > Sma200`), so a concept like
+"uptrend" is not in the seeded vocabulary. See `PLAN.md` §14 and `docs/adr/0007`.
+
 ## Getting started
 
 Requires the .NET 10 SDK and a container runtime. See `DEPENDENCIES.md` for exact versions and
@@ -107,11 +147,23 @@ dotnet build MarketEye.sln
 dotnet run --project src/MarketEye.Api
 ```
 
-The API applies EF migrations on startup **in Development only** and exposes `/health`.
+The API applies EF migrations on startup **in Development only**, seeds both vocabularies on every
+start, and exposes `/health`.
+
+**No API key is required to run the app.** Natural-language parsing falls back to a deterministic
+keyword parser when `Ai:ApiKey` is unset — the manual filter builder, the Strategy Vocabulary, and
+saved strategies all work with no key at all. To use the real model (NVIDIA NIM, free signup
+credits — see `PLAN.md` §5.4):
 
 ```bash
-curl localhost:5199/health    # Healthy
-dotnet test                   # 157 tests
+dotnet user-secrets set "Ai:ApiKey" "nvapi-..." --project src/MarketEye.Api
+```
+
+Then, separately, `dotnet run --project src/MarketEye.Web` and open `http://localhost:5015/screen`.
+
+```bash
+curl localhost:5199/health              # Healthy
+dotnet test tests/MarketEye.UnitTests   # 231 tests, no Docker required
 ```
 
 Ingestion and screening:
@@ -130,9 +182,38 @@ curl -X POST -H "X-Ingest-Secret: $SECRET" "localhost:5199/api/ingest/fundamenta
 curl "localhost:5199/api/reconcile/corporate-actions?securities=25"
 ```
 
-`MarketEye.IntegrationTests` and `MarketEye.BacktestTests` start their own SQL Server containers through
-Testcontainers, so the container runtime must be running. `MarketEye.AiEvals` calls a live LLM and is
-excluded from the default loop.
+Natural-language screening, end to end — works with or without an `Ai:ApiKey` (the keyword fallback
+answers this one without a model call):
+
+```bash
+curl -X POST localhost:5199/api/parse -H 'Content-Type: application/json' \
+  -d '{"prompt":"cheap profitable small caps that arent overbought"}'
+# → { "criteria": {...}, "concepts": [...], "explicitFilters": [], "disclaimer": "..." }
+
+# Confirm and run the returned "criteria" object:
+curl -X POST localhost:5199/api/screen -H 'Content-Type: application/json' \
+  -d '{"criteria": <the "criteria" object from the response above>}'
+```
+
+Or in the browser: `/screen` for the interpretation panel and the manual filter builder,
+`/vocabulary` to read or edit what a word like "cheap" means, `/strategies` to save, re-run, and
+delete named screens.
+
+```bash
+dotnet test tests/MarketEye.BacktestTests             # 11 tests, no Docker required
+MARKETEYE_INTEGRATION=1 dotnet test tests/MarketEye.IntegrationTests   # 25 tests, needs Docker running
+```
+
+`MarketEye.IntegrationTests`' container-backed tests are skipped unless `MARKETEYE_INTEGRATION=1`
+is set — a bare `dotnet test` never needs Docker. When set, they start their own throwaway SQL
+Server containers through Testcontainers (roughly 10–12s to first query, emulated on Apple
+Silicon — see `DEPENDENCIES.md`) and cover the vocabulary, screening pipeline, saved strategies,
+and `IntentTranslationService`'s cache/budget behaviour against a real database.
+
+`MarketEye.AiEvals` (§5.6's ≥85% eval gate) is under active development and is not yet part of a
+clean solution-wide `dotnet test MarketEye.sln` run — its two-tier offline/live structure exists,
+but the 50 recorded cases it replays are not complete. Run the projects above individually until
+that lands.
 
 ## Correctness
 

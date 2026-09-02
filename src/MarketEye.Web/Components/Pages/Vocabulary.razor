@@ -1,0 +1,274 @@
+@page "/vocabulary"
+@using System.Net.Http.Json
+@inject HttpClient Http
+@rendermode InteractiveServer
+
+<PageTitle>Strategy Vocabulary — MarketEye</PageTitle>
+
+<h1>Strategy Vocabulary</h1>
+
+<p class="lede">
+    What the words mean. When a screen says <em>cheap</em>, it uses the definition on this page —
+    a number a person chose and can change here — never a number a model invented.
+</p>
+
+@if (_concepts is null)
+{
+    <p><em>Loading vocabulary…</em></p>
+}
+else
+{
+    @if (_error is not null)
+    {
+        <div class="error">@_error</div>
+    }
+
+    <table class="vocab">
+        <thead>
+            <tr>
+                <th>Concept</th>
+                <th>Definition</th>
+                <th>Also called</th>
+                <th class="centre">Enabled</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var c in _concepts)
+        {
+            <tr class="@(c.IsEnabled ? null : "disabled")">
+                <td>
+                    <strong>@c.DisplayName</strong>
+                    @if (c.IsSystem)
+                    {
+                        <span class="badge" title="Seeded with MarketEye. Editable, but not deletable.">seeded</span>
+                    }
+                    @if (c.Description is not null)
+                    {
+                        <div class="desc">@c.Description</div>
+                    }
+                </td>
+                <td class="definition">@c.Explanation</td>
+                <td class="aliases">@(c.Aliases.Count == 0 ? "—" : string.Join(", ", c.Aliases))</td>
+                <td class="centre">
+                    <input type="checkbox" checked="@c.IsEnabled"
+                           @onchange="e => ToggleAsync(c, e)" disabled="@_busy" />
+                </td>
+                <td>
+                    <button class="link" @onclick="() => Edit(c)" disabled="@_busy">edit definition</button>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+
+    <p class="hint">
+        A disabled concept is rejected exactly like an unknown one — a screen naming it fails
+        rather than quietly falling back to the old meaning.
+    </p>
+}
+
+@if (_editing is not null)
+{
+    <div class="editor">
+        <h2>@_editing.DisplayName</h2>
+
+        <p class="hint">
+            Each row is a metric, a comparison and a threshold. Only metrics from the whitelist can
+            be used, and each has a permitted range — that is what keeps a definition safe to run.
+        </p>
+
+        @foreach (var (row, index) in _rows.Select((r, i) => (r, i)))
+        {
+            <div class="filter-row">
+                <select @bind="row.Field">
+                    @foreach (var m in _metrics ?? [])
+                    {
+                        <option value="@m.Name">@m.DisplayName</option>
+                    }
+                </select>
+
+                <select @bind="row.Operator">
+                    <option value="LessThan">&lt;</option>
+                    <option value="LessThanOrEqual">&le;</option>
+                    <option value="GreaterThan">&gt;</option>
+                    <option value="GreaterThanOrEqual">&ge;</option>
+                </select>
+
+                <input type="number" step="any" @bind="row.Value" />
+
+                <button class="link" @onclick="() => _rows.RemoveAt(index)"
+                        disabled="@(_rows.Count == 1)">Remove</button>
+            </div>
+        }
+
+        <ValidationErrors Errors="@_editorErrors" Heading="Rejected — nothing was saved." />
+
+        <div class="actions">
+            <button @onclick="() => _rows.Add(new FilterRow { Field = _metrics?[0].Name ?? string.Empty })"
+                    disabled="@(_rows.Count >= 20)">Add row</button>
+            <button class="primary" @onclick="SaveAsync" disabled="@_busy">
+                @(_busy ? "Saving…" : "Save definition")
+            </button>
+            <button class="link" @onclick="() => _editing = null" disabled="@_busy">Cancel</button>
+        </div>
+    </div>
+}
+
+@code {
+    private List<ConceptDto>? _concepts;
+    private List<MetricDto>? _metrics;
+    private ConceptDto? _editing;
+    private readonly List<FilterRow> _rows = [];
+    private Dictionary<string, string[]> _editorErrors = [];
+    private string? _error;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _metrics = await Http.GetFromJsonAsync<List<MetricDto>>("/api/concepts") ?? [];
+            _concepts = await Http.GetFromJsonAsync<List<ConceptDto>>(
+                "/api/vocabulary/strategy-concepts") ?? [];
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not load the vocabulary: {ex.Message}";
+            _concepts ??= [];
+        }
+    }
+
+    private void Edit(ConceptDto concept)
+    {
+        _editing = concept;
+        _editorErrors = [];
+        _rows.Clear();
+
+        // The stored definition is a flat AND of comparisons -- the write path rejects anything
+        // else -- so it maps one-to-one onto these rows.
+        foreach (var child in concept.Definition.Children)
+        {
+            _rows.Add(new FilterRow
+            {
+                Field = child.Field,
+                Operator = child.Operator,
+                Value = child.Value,
+            });
+        }
+
+        if (_rows.Count == 0) _rows.Add(new FilterRow { Field = _metrics?[0].Name ?? string.Empty });
+    }
+
+    private async Task SaveAsync()
+    {
+        if (_editing is null) return;
+
+        _busy = true;
+        _editorErrors = [];
+        try
+        {
+            var response = await Http.PutAsJsonAsync(
+                $"/api/vocabulary/strategy-concepts/{_editing.Name}",
+                new
+                {
+                    name = _editing.Name,
+                    displayName = _editing.DisplayName,
+                    description = _editing.Description,
+                    aliases = _editing.Aliases,
+                    isEnabled = _editing.IsEnabled,
+                    definition = new
+                    {
+                        kind = "group",
+                        op = "And",
+                        children = _rows.Select(r => new
+                        {
+                            kind = "comparison",
+                            field = r.Field,
+                            @operator = r.Operator,
+                            value = r.Value,
+                        }).ToArray(),
+                    },
+                });
+
+            if (response.IsSuccessStatusCode)
+            {
+                _editing = null;
+                await LoadAsync();
+            }
+            else
+            {
+                // Show the validator's own paths and messages. A definition is rejected whole --
+                // partial saves would leave a concept meaning something nobody chose.
+                _editorErrors = await ApiJson.ReadErrorsAsync(response);
+            }
+        }
+        catch (Exception ex)
+        {
+            _editorErrors = new() { ["request"] = [ex.Message] };
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ToggleAsync(ConceptDto concept, ChangeEventArgs e)
+    {
+        _busy = true;
+        try
+        {
+            var enabled = e.Value is true;
+            var response = await Http.PutAsJsonAsync(
+                $"/api/vocabulary/strategy-concepts/{concept.Name}",
+                new
+                {
+                    name = concept.Name,
+                    displayName = concept.DisplayName,
+                    description = concept.Description,
+                    aliases = concept.Aliases,
+                    isEnabled = enabled,
+                    definition = new
+                    {
+                        kind = "group",
+                        op = "And",
+                        children = concept.Definition.Children.Select(c => new
+                        {
+                            kind = "comparison",
+                            field = c.Field,
+                            @operator = c.Operator,
+                            value = c.Value,
+                        }).ToArray(),
+                    },
+                });
+
+            _error = response.IsSuccessStatusCode ? null : "Could not change that concept.";
+            await LoadAsync();
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed class FilterRow
+    {
+        public string Field { get; set; } = "";
+        public string Operator { get; set; } = "LessThan";
+        public decimal Value { get; set; }
+    }
+
+    private sealed record MetricDto(string Name, string DisplayName);
+
+    private sealed record ConceptDto(
+        string Name, string DisplayName, string? Description, List<string> Aliases,
+        bool IsEnabled, bool IsSystem, DefinitionDto Definition, string Explanation);
+
+    private sealed record DefinitionDto(List<ComparisonDto> Children);
+
+    private sealed record ComparisonDto(string Field, string Operator, decimal Value);
+
+}

@@ -5,9 +5,13 @@ namespace MarketEye.Domain.Entities;
 /// <summary>
 /// Persisted row of the controlled vocabulary (PLAN.md §5.2).
 ///
-/// §5.2 calls the vocabulary a first-class feature, not a lookup table: it is what a user inspects
-/// and edits when they disagree with what "cheap" means. Storing it makes those definitions
-/// reviewable and versionable instead of buried in a prompt.
+/// This is the compiler's whitelist: <see cref="ColumnName"/> is what CriteriaCompiler turns into
+/// a SQL identifier, which is exactly why the table is system-owned and has no edit screen.
+///
+/// The qualitative half of the vocabulary — what "cheap" means — lives in
+/// <see cref="StrategyConceptEntity"/>, which is user-editable and carries no column names.
+/// Keeping a threshold a user can change apart from a string that becomes SQL is the whole point
+/// of the split; see docs/adr/0007.
 /// </summary>
 public class MetricConceptEntity
 {
@@ -31,14 +35,6 @@ public class MetricConceptEntity
     public decimal MinValue { get; set; }
     public decimal MaxValue { get; set; }
     public string? Unit { get; set; }
-
-    /// <summary>
-    /// Default threshold for a qualitative term like "cheap". Nullable because most concepts are
-    /// plain metrics with no implied threshold. §5.1: this number comes from here, never the model.
-    /// </summary>
-    public decimal? DefaultThreshold { get; set; }
-
-    public ComparisonOperator? DefaultOperator { get; set; }
 }
 
 public enum MetricSource

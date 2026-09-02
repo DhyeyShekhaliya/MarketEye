@@ -51,7 +51,21 @@ public static class RatioCalculator
         };
     }
 
-    /// <summary>Shares are reported in the same unit as the financials, so no scaling is applied.</summary>
+    /// <summary>
+    /// Shares are reported in the same unit as the financials, so no scaling is applied.
+    ///
+    /// A consequence worth naming, discovered when Phase 2's Strategy Vocabulary assumed the
+    /// opposite: indianapi.in reports SharesOutstanding in the same crore-scaled convention as
+    /// Revenue/NetIncome/ShareholdersEquity (confirmed against TCS -- ~361.81 "shares" against a
+    /// real diluted count of ~3.62 billion is exactly 361.81 crore). Every OTHER ratio here divides
+    /// two same-unit crore quantities, so the unit cancels and Pe/Pb/Ps/Roe/Roic/DebtToEquity are
+    /// correct regardless. MarketCap is the one exception: <paramref name="price"/> is a real
+    /// per-share rupee figure from the price series, never crore-scaled, so multiplying it by a
+    /// crore-scaled share count yields a result in ₹ CRORE, not raw rupees. See
+    /// MetricConceptSeed's "INR_CR" unit and StrategyConceptSeed's market-cap thresholds, which
+    /// are calibrated against this actual output rather than the raw-rupee figure the field name
+    /// suggests.
+    /// </summary>
     public static decimal? MarketCap(decimal? price, decimal? shares) =>
         price is > 0 && shares is > 0 ? price * shares : null;
 

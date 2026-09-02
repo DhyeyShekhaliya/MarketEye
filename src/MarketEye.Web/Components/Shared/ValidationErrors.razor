@@ -1,0 +1,41 @@
+@*
+    Renders a validation-problem error dictionary — {path: [messages]} — the shape every
+    rejection in the API returns (Program.cs's ValidationProblem helper), so a "P/E ratio outside
+    its allowed range" and an "unknown concept" read identically wherever they surface.
+
+    Shared by Screen.razor (manual builder, interpretation panel, inline concept editor) and
+    Vocabulary.razor's editor, so tightening this rendering once fixes it everywhere.
+*@
+@if (Errors is { Count: > 0 })
+{
+    <div class="error">
+        @if (!string.IsNullOrEmpty(Heading))
+        {
+            <strong>@Heading</strong>
+        }
+        <ul>
+            @foreach (var (path, messages) in Errors)
+            {
+                foreach (var message in messages)
+                {
+                    <li><code>@path</code> @message</li>
+                }
+            }
+        </ul>
+    </div>
+}
+else if (!string.IsNullOrEmpty(Message))
+{
+    <div class="error">@Message</div>
+}
+
+@code {
+    /// <summary>Path → messages, from a 400 ValidationProblem response.</summary>
+    [Parameter] public Dictionary<string, string[]>? Errors { get; set; }
+
+    /// <summary>Shown above the list, e.g. "Rejected — nothing was saved."</summary>
+    [Parameter] public string? Heading { get; set; }
+
+    /// <summary>A single plain-text error (a network failure, not a validation rejection).</summary>
+    [Parameter] public string? Message { get; set; }
+}

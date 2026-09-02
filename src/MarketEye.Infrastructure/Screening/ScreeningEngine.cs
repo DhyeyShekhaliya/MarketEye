@@ -78,4 +78,11 @@ public sealed record ScreenResult
     public required int SnapshotId { get; init; }
     public required DateOnly AsOfDate { get; init; }
     public required int DurationMs { get; init; }
+
+    /// <summary>
+    /// Always false from ScreeningEngine itself; CachedScreeningEngine sets this true on a hit
+    /// (§5.5), so an API caller can tell a fast response apart from a cached one instead of
+    /// seeing the original run's stale DurationMs repeated on every subsequent hit.
+    /// </summary>
+    public bool FromCache { get; init; }
 }

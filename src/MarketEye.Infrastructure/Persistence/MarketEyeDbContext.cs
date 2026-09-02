@@ -20,8 +20,10 @@ public class MarketEyeDbContext(DbContextOptions<MarketEyeDbContext> options) : 
     public DbSet<CorporateAction> CorporateActions => Set<CorporateAction>();
     public DbSet<FundamentalRatios> FundamentalRatios => Set<FundamentalRatios>();
     public DbSet<MetricConceptEntity> MetricConcepts => Set<MetricConceptEntity>();
+    public DbSet<StrategyConceptEntity> StrategyConcepts => Set<StrategyConceptEntity>();
     public DbSet<ScreenRun> ScreenRuns => Set<ScreenRun>();
     public DbSet<ApiCallBudget> ApiCallBudgets => Set<ApiCallBudget>();
+    public DbSet<SavedStrategy> SavedStrategies => Set<SavedStrategy>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -180,17 +182,37 @@ public class MarketEyeDbContext(DbContextOptions<MarketEyeDbContext> options) : 
             e.Property(x => x.ColumnName).HasMaxLength(64).IsRequired();
             e.Property(x => x.AllowedOperatorsCsv).HasMaxLength(256).IsRequired();
             e.Property(x => x.Source).HasConversion<string>().HasMaxLength(24);
-            e.Property(x => x.DefaultOperator).HasConversion<string>().HasMaxLength(24);
             // Wide enough for Indian market caps in rupees: a large-cap is ~2e13, and
             // decimal(18,6) leaves only 12 integer digits. Range bounds are compared against
             // values from any concept, so they must span the widest of them.
             e.Property(x => x.MinValue).HasPrecision(28, 6);
             e.Property(x => x.MaxValue).HasPrecision(28, 6);
-            e.Property(x => x.DefaultThreshold).HasPrecision(28, 6);
 
             // The validator matches ordinally; a case-insensitive duplicate would make which row
             // wins depend on collation.
             e.HasIndex(x => x.Name).IsUnique();
+        });
+
+        b.Entity<StrategyConceptEntity>(e =>
+        {
+            e.ToTable("StrategyConcepts");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Name).HasMaxLength(64).IsRequired();
+            e.Property(x => x.DisplayName).HasMaxLength(128).IsRequired();
+            e.Property(x => x.Description).HasMaxLength(512);
+            e.Property(x => x.AliasesCsv).HasMaxLength(512).IsRequired();
+            e.Property(x => x.DefinitionJson).IsRequired();
+            e.Property(x => x.OwnerUserId).HasMaxLength(64);
+
+            // Scoped by owner from day one, so it stays correct unchanged when authentication
+            // lands and users get their own vocabularies (§14).
+            //
+            // HasFilter(null) is load-bearing. EF's default for a nullable column in a unique
+            // index is "WHERE [OwnerUserId] IS NOT NULL", which -- with every owner null today --
+            // would enforce nothing at all and happily accept two concepts both named "cheap".
+            // Removing the filter restores SQL Server's own semantics, where NULLs compare equal,
+            // so exactly one system-owned row may claim a given name.
+            e.HasIndex(x => new { x.Name, x.OwnerUserId }).IsUnique().HasFilter(null);
         });
 
         b.Entity<ApiCallBudget>(e =>
@@ -212,6 +234,22 @@ public class MarketEyeDbContext(DbContextOptions<MarketEyeDbContext> options) : 
             e.HasOne(x => x.Snapshot).WithMany().HasForeignKey(x => x.SnapshotId)
                 .OnDelete(DeleteBehavior.Restrict);
             e.HasIndex(x => x.RunAt);
+        });
+
+        b.Entity<SavedStrategy>(e =>
+        {
+            e.ToTable("SavedStrategies");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Name).HasMaxLength(128).IsRequired();
+            e.Property(x => x.Description).HasMaxLength(512);
+            e.Property(x => x.OriginalPrompt).HasMaxLength(2000);
+            e.Property(x => x.CriteriaJson).IsRequired();
+            e.Property(x => x.OwnerUserId).HasMaxLength(64);
+
+            // Same null-safe uniqueness as StrategyConceptEntity (docs/adr/0007's pattern):
+            // HasFilter(null) restores SQL Server's own NULL-equality semantics, so with every
+            // owner null today exactly one strategy may claim a given name.
+            e.HasIndex(x => new { x.Name, x.OwnerUserId }).IsUnique().HasFilter(null);
         });
     }
 }

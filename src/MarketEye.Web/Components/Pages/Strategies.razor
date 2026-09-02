@@ -1,0 +1,198 @@
+@page "/strategies"
+@using System.Net.Http.Json
+@inject HttpClient Http
+
+<PageTitle>Strategies — MarketEye</PageTitle>
+
+<h1>Saved Strategies</h1>
+
+<p class="lede">
+    A saved strategy stores its resolved criteria, not the prompt that produced it — it reproduces
+    exactly, even if the vocabulary changes later.
+</p>
+
+<ValidationErrors Message="@_error" />
+
+@if (_strategies is null)
+{
+    <p><em>Loading strategies…</em></p>
+}
+else if (_strategies.Count == 0)
+{
+    <div class="notice">
+        No saved strategies yet. Build a screen on the <a href="screen">Screen</a> page and save it.
+    </div>
+}
+else
+{
+    <table class="strategies">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>Description</th>
+                <th>Last run</th>
+                <th></th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+        @foreach (var s in _strategies)
+        {
+            <tr>
+                <td>
+                    <strong>@s.Name</strong>
+                    @if (s.OriginalPrompt is not null)
+                    {
+                        <div class="desc">from: "@s.OriginalPrompt"</div>
+                    }
+                </td>
+                <td class="desc">@(s.Description ?? "—")</td>
+                <td>@(s.LastRunAt is { } t ? t.ToLocalTime().ToString("yyyy-MM-dd HH:mm") : "never")</td>
+                <td>
+                    <button class="link" @onclick="() => RunAsync(s)" disabled="@_busy">
+                        @(_running == s.Name ? "Running…" : "Run")
+                    </button>
+                </td>
+                <td>
+                    <button class="link danger" @onclick="() => DeleteAsync(s)" disabled="@_busy">
+                        Delete
+                    </button>
+                </td>
+            </tr>
+        }
+        </tbody>
+    </table>
+}
+
+@if (_result is not null)
+{
+    <h2>@_ranName</h2>
+
+    <div class="result-meta">
+        @_result.Rows.Count matches ·
+        snapshot #@_result.SnapshotId as of @_result.AsOfDate.ToString("yyyy-MM-dd") ·
+        @_result.DurationMs ms
+    </div>
+
+    @if (_result.Rows.Count == 0)
+    {
+        <p><em>No securities matched.</em></p>
+    }
+    else
+    {
+        <table class="results">
+            <thead>
+                <tr>
+                    <th>Ticker</th><th>Name</th><th>Sector</th>
+                    <th class="num">Close</th><th>Price date</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in _result.Rows)
+                {
+                    <tr>
+                        <td>@r.Ticker</td>
+                        <td>@r.Name</td>
+                        <td>@(r.Sector ?? "—")</td>
+                        <td class="num">@r.Close.ToString("N2")</td>
+                        <td>@r.PriceDate.ToString("yyyy-MM-dd")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private List<StrategyDto>? _strategies;
+    private ScreenResponse? _result;
+    private string? _ranName;
+    private string? _running;
+    private string? _error;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        try
+        {
+            _strategies = await Http.GetFromJsonAsync<List<StrategyDto>>("/api/strategies") ?? [];
+            _error = null;
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not load saved strategies: {ex.Message}";
+            _strategies ??= [];
+        }
+    }
+
+    private async Task RunAsync(StrategyDto strategy)
+    {
+        _busy = true;
+        _running = strategy.Name;
+        _error = null;
+        _result = null;
+
+        try
+        {
+            var response = await Http.PostAsync($"/api/strategies/{Uri.EscapeDataString(strategy.Name)}/run", null);
+
+            if (response.IsSuccessStatusCode)
+            {
+                _result = await response.Content.ReadFromJsonAsync<ScreenResponse>();
+                _ranName = strategy.Name;
+                await LoadAsync(); // picks up the refreshed LastRunAt
+            }
+            else
+            {
+                var errors = await ApiJson.ReadErrorsAsync(response);
+                _error = string.Join(" ", errors.SelectMany(e => e.Value));
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+            _running = null;
+        }
+    }
+
+    private async Task DeleteAsync(StrategyDto strategy)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var response = await Http.DeleteAsync($"/api/strategies/{Uri.EscapeDataString(strategy.Name)}");
+            if (response.IsSuccessStatusCode)
+            {
+                if (_ranName == strategy.Name) { _result = null; _ranName = null; }
+                await LoadAsync();
+            }
+            else
+            {
+                _error = $"Could not delete '{strategy.Name}'.";
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private sealed record StrategyDto(
+        string Name, string? Description, string? OriginalPrompt,
+        DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, DateTimeOffset? LastRunAt);
+
+    private sealed record ScreenResponse(
+        List<ScreenRowDto> Rows, int SnapshotId, DateOnly AsOfDate, int DurationMs);
+
+    private sealed record ScreenRowDto(
+        int Id, string Ticker, string Name, string Exchange,
+        string? Sector, string? Industry, decimal Close, decimal AdjClose, DateOnly PriceDate);
+}

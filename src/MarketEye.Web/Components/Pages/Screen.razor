@@ -1,7 +1,8 @@
 @page "/screen"
+@using System.Net
 @using System.Net.Http.Json
-@using System.Text.Json
-@using System.Text.Json.Serialization
+@using System.Text.Json.Nodes
+@using Microsoft.AspNetCore.Components.Web
 @inject HttpClient Http
 @rendermode InteractiveServer
 
@@ -10,128 +11,620 @@
 <h1>Screen</h1>
 
 <p class="lede">
-    Build a screen from the controlled vocabulary. Thresholds are yours to set — the definitions
-    come from a table you can inspect, not from a model's opinion.
+    Describe a strategy in plain English, or build one from the controlled vocabulary below.
+    Either way, every threshold comes from a table you can inspect — never from the AI's opinion.
 </p>
 
-@if (_concepts is null)
+<div class="nl-box">
+    <label for="nl-prompt">Describe a screen</label>
+    <div class="nl-row">
+        <input id="nl-prompt" class="nl-input" type="text" @ref="_promptInput"
+               placeholder="cheap profitable small caps that aren't overbought"
+               @bind="_prompt" @bind:event="oninput" @onkeydown="OnPromptKeyDownAsync"
+               disabled="@_interpreting" />
+        <button class="primary" @onclick="InterpretAsync" disabled="@(_interpreting || string.IsNullOrWhiteSpace(_prompt))">
+            @(_interpreting ? "Interpreting…" : "Interpret")
+        </button>
+    </div>
+    <span class="hint">Press Enter, or click Interpret. Nothing runs until you confirm below.</span>
+</div>
+
+@if (_clarification is not null)
 {
-    <p><em>Loading vocabulary…</em></p>
-}
-else if (_concepts.Count == 0)
-{
-    <div class="notice">
-        No metric concepts are defined. Run the API once so the vocabulary seeds.
+    <div class="clarification">
+        <strong>I need a bit more to go on.</strong>
+        <p>@_clarification</p>
     </div>
 }
-else
+
+<ValidationErrors Errors="@_parseError" Heading="I couldn't make sense of that." />
+<ValidationErrors Message="@_networkError" />
+
+@if (_liveConcepts.Count > 0 || _liveFilters.Count > 0)
 {
-    <div class="filters">
-        @foreach (var (row, index) in _rows.Select((r, i) => (r, i)))
+    <div class="panel">
+        <div class="panel-prompt">"@_submittedPrompt"</div>
+        <h2>Interpreted strategy</h2>
+
+        @foreach (var c in _liveConcepts)
+        {
+            <div class="concept-row">
+                <div class="concept-main">
+                    <strong>@c.DisplayName</strong>
+                    <span class="arrow">→</span>
+                    <span class="definition">@c.Explanation</span>
+                </div>
+                @if (c.OverriddenBy.Count > 0)
+                {
+                    <div class="override-note">
+                        @(c.FullyOverridden ? "Fully replaced by" : "Partly replaced by") the number@(c.OverriddenBy.Count > 1 ? "s" : "") you gave for
+                        @string.Join(", ", c.OverriddenBy.Select(MetricDisplayName)).
+                    </div>
+                }
+                <div class="concept-actions">
+                    <button class="link" @onclick="() => StartEditAsync(c)">edit definition</button>
+                    <button class="link" @onclick="() => RemoveConcept(c.Name)" title="Remove this concept">×</button>
+                </div>
+            </div>
+        }
+
+        @foreach (var f in _liveFilters)
+        {
+            <div class="concept-row">
+                <div class="concept-main">
+                    <strong>@f.DisplayName</strong>
+                    <span class="arrow">→</span>
+                    <span class="definition">@f.Explanation</span>
+                    <span class="badge">your number</span>
+                </div>
+            </div>
+        }
+
+        <p class="provenance">
+            Definitions come from your Strategy Vocabulary — not from the AI.
+            <a href="vocabulary">Manage the vocabulary</a>
+        </p>
+
+        <div class="actions">
+            <button class="primary" @onclick="RunInterpretedAsync"
+                    disabled="@(_running || (_liveConcepts.Count == 0 && _liveFilters.Count == 0))">
+                @(_running ? "Running…" : "Run screen")
+            </button>
+            <button @onclick="() => _showSaveForm = !_showSaveForm"
+                    disabled="@(_liveConcepts.Count == 0 && _liveFilters.Count == 0)">
+                Save as strategy
+            </button>
+            @if (_liveConcepts.Count == 0 && _liveFilters.Count == 0)
+            {
+                <span class="hint">Nothing left to screen — you removed every concept.</span>
+            }
+        </div>
+
+        @if (_showSaveForm)
+        {
+            <div class="save-strategy">
+                <input type="text" placeholder="Strategy name" @bind="_saveName" @bind:event="oninput" disabled="@_saving" />
+                <input type="text" placeholder="Description (optional)" @bind="_saveDescription" @bind:event="oninput" disabled="@_saving" />
+                <button class="primary" @onclick="SaveInterpretedStrategyAsync"
+                        disabled="@(_saving || string.IsNullOrWhiteSpace(_saveName))">
+                    @(_saving ? "Saving…" : "Confirm save")
+                </button>
+                @if (_saveError is not null)
+                {
+                    <span class="error-inline">@_saveError</span>
+                }
+            </div>
+        }
+        @if (_savedName is not null)
+        {
+            <p class="hint">
+                Saved "@_savedName" — stores this exact criteria, not the prompt.
+                View it on <a href="strategies">Strategies</a>.
+            </p>
+        }
+    </div>
+}
+
+@if (_editingConcept is not null)
+{
+    <div class="editor">
+        <h2>@_editingConcept.DisplayName</h2>
+        <p class="hint">
+            Each row is a metric, a comparison and a threshold. Saving here changes what
+            "@_editingConcept.DisplayName.ToLowerInvariant()" means everywhere, not just this screen.
+        </p>
+
+        @foreach (var (row, index) in _editRows.Select((r, i) => (r, i)))
         {
             <div class="filter-row">
                 <select @bind="row.Field">
-                    @foreach (var c in _concepts)
+                    @foreach (var m in _metrics ?? [])
                     {
-                        <option value="@c.Name">@c.DisplayName</option>
+                        <option value="@m.Name">@m.DisplayName</option>
                     }
                 </select>
-
                 <select @bind="row.Operator">
                     <option value="LessThan">&lt;</option>
                     <option value="LessThanOrEqual">&le;</option>
                     <option value="GreaterThan">&gt;</option>
                     <option value="GreaterThanOrEqual">&ge;</option>
                 </select>
-
                 <input type="number" step="any" @bind="row.Value" />
-
-                <button class="link" @onclick="() => RemoveRow(index)"
-                        disabled="@(_rows.Count == 1)">Remove</button>
+                <button class="link" @onclick="() => _editRows.RemoveAt(index)"
+                        disabled="@(_editRows.Count == 1)">Remove</button>
             </div>
         }
-    </div>
 
-    <div class="actions">
-        <button @onclick="AddRow" disabled="@(_rows.Count >= 20)">Add filter</button>
-        <button class="primary" @onclick="RunAsync" disabled="@_running">
-            @(_running ? "Running…" : "Run screen")
-        </button>
-        @if (_rows.Count >= 20)
-        {
-            <span class="hint">Maximum of 20 comparisons (§6).</span>
-        }
-    </div>
+        <ValidationErrors Errors="@_editorErrors" Heading="Rejected — nothing was saved." />
 
-    @if (_error is not null)
+        <div class="actions">
+            <button @onclick="() => _editRows.Add(new FilterRow { Field = _metrics?.FirstOrDefault()?.Name ?? string.Empty })"
+                    disabled="@(_editRows.Count >= 20)">Add row</button>
+            <button class="primary" @onclick="SaveEditAsync" disabled="@_editBusy">
+                @(_editBusy ? "Saving…" : "Save definition")
+            </button>
+            <button class="link" @onclick="() => _editingConcept = null" disabled="@_editBusy">Cancel</button>
+        </div>
+    </div>
+}
+
+<details class="manual">
+    <summary>Build a screen manually instead</summary>
+
+    @if (_metrics is null)
     {
-        <div class="error">@_error</div>
+        <p><em>Loading vocabulary…</em></p>
     }
-
-    @if (_result is not null)
+    else if (_metrics.Count == 0)
     {
-        <div class="result-meta">
-            @_result.Rows.Count matches ·
-            snapshot #@_result.SnapshotId as of @_result.AsOfDate.ToString("yyyy-MM-dd") ·
-            @_result.DurationMs ms
+        <div class="notice">No metric concepts are defined. Run the API once so the vocabulary seeds.</div>
+    }
+    else
+    {
+        <div class="filters">
+            @foreach (var (row, index) in _rows.Select((r, i) => (r, i)))
+            {
+                <div class="filter-row">
+                    <select @bind="row.Field">
+                        @foreach (var m in _metrics)
+                        {
+                            <option value="@m.Name">@m.DisplayName</option>
+                        }
+                    </select>
+                    <select @bind="row.Operator">
+                        <option value="LessThan">&lt;</option>
+                        <option value="LessThanOrEqual">&le;</option>
+                        <option value="GreaterThan">&gt;</option>
+                        <option value="GreaterThanOrEqual">&ge;</option>
+                    </select>
+                    <input type="number" step="any" @bind="row.Value" />
+                    <button class="link" @onclick="() => RemoveRow(index)"
+                            disabled="@(_rows.Count == 1)">Remove</button>
+                </div>
+            }
         </div>
 
-        @if (_result.Rows.Count == 0)
-        {
-            <p><em>No securities matched.</em></p>
-        }
-        else
-        {
-            <table class="results">
-                <thead>
+        <div class="actions">
+            <button @onclick="AddRow" disabled="@(_rows.Count >= 20)">Add filter</button>
+            <button class="primary" @onclick="RunAsync" disabled="@_running">
+                @(_running ? "Running…" : "Run screen")
+            </button>
+            @if (_rows.Count >= 20)
+            {
+                <span class="hint">Maximum of 20 comparisons (§6).</span>
+            }
+        </div>
+    }
+</details>
+
+<ValidationErrors Errors="@_screenErrors" Heading="The screen was rejected." />
+
+@if (_result is not null)
+{
+    <div class="result-meta">
+        @_result.Rows.Count matches ·
+        snapshot #@_result.SnapshotId as of @_result.AsOfDate.ToString("yyyy-MM-dd") ·
+        @_result.DurationMs ms
+    </div>
+
+    @if (_result.Rows.Count == 0)
+    {
+        <p><em>No securities matched.</em></p>
+    }
+    else
+    {
+        <table class="results">
+            <thead>
+                <tr>
+                    <th>Ticker</th><th>Name</th><th>Sector</th>
+                    <th class="num">Close</th><th>Price date</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var r in _result.Rows)
+                {
                     <tr>
-                        <th>Ticker</th><th>Name</th><th>Sector</th>
-                        <th class="num">Close</th><th>Price date</th>
+                        <td>@r.Ticker</td>
+                        <td>@r.Name</td>
+                        <td>@(r.Sector ?? "—")</td>
+                        @* Raw Close: what actually traded. AdjClose is for returns only (§4.4). *@
+                        <td class="num">@r.Close.ToString("N2")</td>
+                        <td>@r.PriceDate.ToString("yyyy-MM-dd")</td>
                     </tr>
-                </thead>
-                <tbody>
-                    @foreach (var r in _result.Rows)
-                    {
-                        <tr>
-                            <td>@r.Ticker</td>
-                            <td>@r.Name</td>
-                            <td>@(r.Sector ?? "—")</td>
-                            @* Raw Close: what actually traded. AdjClose is for returns only (§4.4). *@
-                            <td class="num">@r.Close.ToString("N2")</td>
-                            <td>@r.PriceDate.ToString("yyyy-MM-dd")</td>
-                        </tr>
-                    }
-                </tbody>
-            </table>
-        }
+                }
+            </tbody>
+        </table>
     }
 }
 
 @code {
-    private List<ConceptDto>? _concepts;
+    // --- Manual builder (no AI) --------------------------------------------------------------
+    private List<MetricDto>? _metrics;
     private readonly List<FilterRow> _rows = [new()];
+
+    // --- Shared result / error surface -------------------------------------------------------
     private ScreenResponse? _result;
-    private string? _error;
+    private Dictionary<string, string[]>? _screenErrors;
+    private string? _networkError;
     private bool _running;
+
+    // --- Natural-language interpretation (§5.1, §5.3, §5.4) ----------------------------------
+    private string _prompt = "";
+    private string _submittedPrompt = "";
+    private bool _interpreting;
+    private string? _clarification;
+    private Dictionary<string, string[]>? _parseError;
+
+    /// <summary>
+    /// The server's resolved ScreenCriteria (universe/sort/limit), kept as raw JSON rather than a
+    /// typed model. Only its "root" is ever rebuilt -- from the LIVE concept/filter lists, not the
+    /// server's original root -- so Run posts exactly what the panel shows after any edit or
+    /// removal (§5.3: "Run screen" posts the CONFIRMED criteria).
+    /// </summary>
+    private JsonObject? _criteriaEnvelope;
+
+    private List<ConceptVm> _liveConcepts = [];
+    private List<FilterVm> _liveFilters = [];
+
+    private ElementReference _promptInput;
+    private bool _focusPromptNext;
+
+    // --- Inline "edit definition" (§5.2) ------------------------------------------------------
+    private VocabConceptDto? _editingConcept;
+    private readonly List<FilterRow> _editRows = [];
+    private Dictionary<string, string[]> _editorErrors = [];
+    private bool _editBusy;
+
+    // --- Save as strategy (§10) ---------------------------------------------------------------
+    private bool _showSaveForm;
+    private string _saveName = "";
+    private string _saveDescription = "";
+    private string? _savedName;
+    private string? _saveError;
+    private bool _saving;
 
     protected override async Task OnInitializedAsync()
     {
         try
         {
-            _concepts = await Http.GetFromJsonAsync<List<ConceptDto>>("/api/concepts") ?? [];
-            if (_concepts.Count > 0) _rows[0].Field = _concepts[0].Name;
+            _metrics = await Http.GetFromJsonAsync<List<MetricDto>>("/api/concepts") ?? [];
+            if (_metrics.Count > 0) _rows[0].Field = _metrics[0].Name;
         }
         catch (Exception ex)
         {
-            _error = $"Could not load the vocabulary: {ex.Message}";
-            _concepts = [];
+            _networkError = $"Could not load the vocabulary: {ex.Message}";
+            _metrics = [];
         }
     }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusPromptNext) return;
+        _focusPromptNext = false;
+        try { await _promptInput.FocusAsync(); }
+        catch { /* the input may not be focusable yet on this render pass; harmless to skip */ }
+    }
+
+    private async Task OnPromptKeyDownAsync(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !_interpreting && !string.IsNullOrWhiteSpace(_prompt))
+        {
+            await InterpretAsync();
+        }
+    }
+
+    private async Task InterpretAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_prompt)) return;
+
+        _interpreting = true;
+        _submittedPrompt = _prompt;
+        _clarification = null;
+        _parseError = null;
+        _networkError = null;
+        _screenErrors = null;
+        _result = null;
+        _liveConcepts = [];
+        _liveFilters = [];
+        _criteriaEnvelope = null;
+
+        try
+        {
+            var response = await Http.PostAsJsonAsync("/api/parse", new { prompt = _prompt });
+
+            if (response.StatusCode == HttpStatusCode.TooManyRequests)
+            {
+                var body = await ApiJson.ReadErrorsAsync(response);
+                _networkError = body.TryGetValue("error", out var m) ? m.FirstOrDefault() : "Too many parse requests. Try again shortly.";
+                return;
+            }
+
+            if (!response.IsSuccessStatusCode)
+            {
+                // §5.1: an unknown concept is an answer, not a crash -- show which word.
+                _parseError = await ApiJson.ReadErrorsAsync(response);
+                return;
+            }
+
+            var node = await response.Content.ReadFromJsonAsync<JsonNode>();
+            var clarification = node?["clarification"]?.GetValue<string?>();
+            if (!string.IsNullOrWhiteSpace(clarification))
+            {
+                // §5.6: a low-confidence parse asks a question rather than guessing. Refocus the
+                // box so refining the request is the very next thing the user can do.
+                _clarification = clarification;
+                _focusPromptNext = true;
+                return;
+            }
+
+            _criteriaEnvelope = node?["criteria"]?.AsObject();
+            _liveConcepts = ReadConcepts(node?["concepts"] as JsonArray);
+            _liveFilters = ReadFilters(node?["explicitFilters"] as JsonArray);
+        }
+        catch (Exception ex)
+        {
+            _networkError = $"Could not reach the parser: {ex.Message}";
+        }
+        finally
+        {
+            _interpreting = false;
+        }
+    }
+
+    private static List<ConceptVm> ReadConcepts(JsonArray? array) =>
+        (array ?? []).Select(n => new ConceptVm(
+            n!["name"]!.GetValue<string>(),
+            n["displayName"]!.GetValue<string>(),
+            n["description"]?.GetValue<string?>(),
+            n["definition"]!.AsObject(),
+            n["explanation"]!.GetValue<string>(),
+            (n["overriddenBy"] as JsonArray ?? []).Select(x => x!.GetValue<string>()).ToList(),
+            n["fullyOverridden"]?.GetValue<bool>() ?? false))
+        .ToList();
+
+    private static List<FilterVm> ReadFilters(JsonArray? array) =>
+        (array ?? []).Select(n => new FilterVm(
+            n!["field"]!.GetValue<string>(),
+            n["displayName"]!.GetValue<string>(),
+            n["comparison"]!.AsObject(),
+            n["explanation"]!.GetValue<string>()))
+        .ToList();
+
+    private string MetricDisplayName(string metricName) =>
+        _metrics?.FirstOrDefault(m => m.Name == metricName)?.DisplayName ?? metricName;
+
+    /// <summary>
+    /// Drops a concept from what will run. Its comparisons never reach the rebuilt root in
+    /// <see cref="RunInterpretedAsync"/>, so this is a real removal, not a cosmetic one (§5.3).
+    /// </summary>
+    private void RemoveConcept(string name) => _liveConcepts.RemoveAll(c => c.Name == name);
+
+    /// <summary>
+    /// Rebuilt from the LIVE concept/filter lists, not the server's original root: a removed
+    /// concept's comparisons must not survive into anything that runs OR is saved (§5.3). Shared by
+    /// <see cref="RunInterpretedAsync"/> and <see cref="SaveInterpretedStrategyAsync"/> so a saved
+    /// strategy always matches exactly what "Run screen" would have posted.
+    /// </summary>
+    private JsonObject? BuildLiveCriteriaEnvelope()
+    {
+        if (_criteriaEnvelope is null) return null;
+        if (_liveConcepts.Count == 0 && _liveFilters.Count == 0) return null;
+
+        var children = new JsonArray();
+        foreach (var c in _liveConcepts)
+        {
+            foreach (var comparison in c.Definition["children"]!.AsArray())
+            {
+                children.Add(comparison!.DeepClone());
+            }
+        }
+        foreach (var f in _liveFilters)
+        {
+            children.Add(f.Comparison.DeepClone());
+        }
+
+        var envelope = _criteriaEnvelope.DeepClone()!.AsObject();
+        envelope["root"] = new JsonObject { ["kind"] = "group", ["op"] = "And", ["children"] = children };
+        return envelope;
+    }
+
+    private async Task RunInterpretedAsync()
+    {
+        var envelope = BuildLiveCriteriaEnvelope();
+        if (envelope is null) return;
+
+        _running = true;
+        _screenErrors = null;
+        _networkError = null;
+        _result = null;
+
+        try
+        {
+            var response = await Http.PostAsJsonAsync("/api/screen", new { criteria = envelope });
+
+            if (response.IsSuccessStatusCode)
+            {
+                _result = await response.Content.ReadFromJsonAsync<ScreenResponse>();
+            }
+            else
+            {
+                _screenErrors = await ApiJson.ReadErrorsAsync(response);
+            }
+        }
+        catch (Exception ex)
+        {
+            _networkError = ex.Message;
+        }
+        finally
+        {
+            _running = false;
+        }
+    }
+
+    private async Task SaveInterpretedStrategyAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_saveName)) return;
+
+        var envelope = BuildLiveCriteriaEnvelope();
+        if (envelope is null) return;
+
+        _saving = true;
+        _saveError = null;
+
+        try
+        {
+            var response = await Http.PostAsJsonAsync("/api/strategies", new
+            {
+                name = _saveName,
+                description = string.IsNullOrWhiteSpace(_saveDescription) ? null : _saveDescription,
+                // Provenance only -- what actually re-runs is the criteria below, never a re-parse
+                // of this prompt (SavedStrategy.OriginalPrompt).
+                originalPrompt = _submittedPrompt,
+                criteria = envelope,
+            });
+
+            if (response.IsSuccessStatusCode)
+            {
+                _savedName = _saveName;
+                _saveName = "";
+                _saveDescription = "";
+                _showSaveForm = false;
+            }
+            else if (response.StatusCode == HttpStatusCode.Conflict)
+            {
+                _saveError = $"A saved strategy named '{_saveName}' already exists.";
+            }
+            else
+            {
+                var errors = await ApiJson.ReadErrorsAsync(response);
+                _saveError = string.Join(" ", errors.SelectMany(e => e.Value));
+            }
+        }
+        catch (Exception ex)
+        {
+            _saveError = ex.Message;
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    // --- Inline "edit definition" -------------------------------------------------------------
+
+    private async Task StartEditAsync(ConceptVm concept)
+    {
+        _editorErrors = [];
+        try
+        {
+            // Fetched fresh rather than reused from the parse response: ResolvedConcept (§5.4)
+            // carries no aliases or IsEnabled, and a PUT must round-trip both or it would silently
+            // wipe them (§5.2) -- the vocabulary list is the authoritative record.
+            var all = await Http.GetFromJsonAsync<List<VocabConceptDto>>(
+                "/api/vocabulary/strategy-concepts") ?? [];
+            var full = all.FirstOrDefault(c => c.Name == concept.Name);
+            if (full is null)
+            {
+                _editorErrors = new() { ["error"] = [$"'{concept.DisplayName}' is no longer in the vocabulary."] };
+                return;
+            }
+
+            _editingConcept = full;
+            _editRows.Clear();
+            foreach (var child in full.Definition.Children)
+            {
+                _editRows.Add(new FilterRow { Field = child.Field, Operator = child.Operator, Value = child.Value });
+            }
+            if (_editRows.Count == 0)
+            {
+                _editRows.Add(new FilterRow { Field = _metrics?.FirstOrDefault()?.Name ?? string.Empty });
+            }
+        }
+        catch (Exception ex)
+        {
+            _editorErrors = new() { ["error"] = [ex.Message] };
+        }
+    }
+
+    private async Task SaveEditAsync()
+    {
+        if (_editingConcept is null) return;
+
+        _editBusy = true;
+        _editorErrors = [];
+        try
+        {
+            var response = await Http.PutAsJsonAsync(
+                $"/api/vocabulary/strategy-concepts/{_editingConcept.Name}",
+                new
+                {
+                    name = _editingConcept.Name,
+                    displayName = _editingConcept.DisplayName,
+                    description = _editingConcept.Description,
+                    aliases = _editingConcept.Aliases,
+                    isEnabled = _editingConcept.IsEnabled,
+                    definition = new
+                    {
+                        kind = "group",
+                        op = "And",
+                        children = _editRows.Select(r => new
+                        {
+                            kind = "comparison", field = r.Field, @operator = r.Operator, value = r.Value,
+                        }).ToArray(),
+                    },
+                });
+
+            if (response.IsSuccessStatusCode)
+            {
+                _editingConcept = null;
+
+                // §5.2: every edit-definition click is a free eval case. The edit changes the
+                // vocabulary's VersionToken, which is part of the ParseCache key (§5.5) -- so this
+                // re-parse of the same prompt is guaranteed to be a fresh model call, not a replay
+                // of the parse made under the old definition.
+                await InterpretAsync();
+            }
+            else
+            {
+                _editorErrors = await ApiJson.ReadErrorsAsync(response);
+            }
+        }
+        catch (Exception ex)
+        {
+            _editorErrors = new() { ["error"] = [ex.Message] };
+        }
+        finally
+        {
+            _editBusy = false;
+        }
+    }
+
+    // --- Manual builder --------------------------------------------------------------------
 
     private void AddRow()
     {
         if (_rows.Count >= 20) return;
-        _rows.Add(new FilterRow { Field = _concepts?.FirstOrDefault()?.Name ?? "" });
+        _rows.Add(new FilterRow { Field = _metrics?.FirstOrDefault()?.Name ?? "" });
     }
 
     private void RemoveRow(int index)
@@ -142,7 +635,8 @@ else
     private async Task RunAsync()
     {
         _running = true;
-        _error = null;
+        _screenErrors = null;
+        _networkError = null;
         _result = null;
 
         try
@@ -173,13 +667,12 @@ else
             }
             else
             {
-                // Validation failures are answers, not crashes: show which concept was rejected.
-                _error = await response.Content.ReadAsStringAsync();
+                _screenErrors = await ApiJson.ReadErrorsAsync(response);
             }
         }
         catch (Exception ex)
         {
-            _error = ex.Message;
+            _networkError = ex.Message;
         }
         finally
         {
@@ -194,9 +687,24 @@ else
         public decimal Value { get; set; }
     }
 
-    private sealed record ConceptDto(
+    private sealed record MetricDto(
         string Name, string DisplayName, string? Description, string? Unit,
-        decimal MinValue, decimal MaxValue, decimal? DefaultThreshold);
+        decimal MinValue, decimal MaxValue);
+
+    private sealed record ConceptVm(
+        string Name, string DisplayName, string? Description, JsonObject Definition,
+        string Explanation, List<string> OverriddenBy, bool FullyOverridden);
+
+    private sealed record FilterVm(
+        string Field, string DisplayName, JsonObject Comparison, string Explanation);
+
+    private sealed record VocabConceptDto(
+        string Name, string DisplayName, string? Description, List<string> Aliases,
+        bool IsEnabled, bool IsSystem, VocabDefinitionDto Definition, string Explanation);
+
+    private sealed record VocabDefinitionDto(List<VocabComparisonDto> Children);
+
+    private sealed record VocabComparisonDto(string Field, string Operator, decimal Value);
 
     private sealed record ScreenResponse(
         List<ScreenRowDto> Rows, int SnapshotId, DateOnly AsOfDate, int DurationMs);

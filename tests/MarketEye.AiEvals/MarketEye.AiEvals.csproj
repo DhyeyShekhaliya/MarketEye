@@ -1,18 +1,26 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Placeholder until Phase 2. §5.6 defines a 50-case prompt -> expected-criteria suite that
-       calls a live LLM and gates CI at >= 85%. It is deliberately NOT a runnable test project
-       yet: an empty test project reports "zero tests ran" as a failure, and padding it with
-       assertions that test nothing would be worse. Phase 2 restores the test packages,
-       sets IsTestProject, and wires it as a CI gate (not part of the default local loop). -->
-  <PropertyGroup>
-    <IsTestProject>false</IsTestProject>
-    <OutputType>Library</OutputType>
-  </PropertyGroup>
+  <!--
+    §5.6's prompt to expected-criteria suite, two-tier (PLAN.md Phase 2 Step 9):
+
+    OFFLINE tier runs in the default loop, on every PR, at zero cost. It replays each recorded
+    model response (evals/recorded/*.json) through the REAL IntentResponseParser, IntentResolver
+    and ScreenCriteriaValidator, catching every regression in resolution, vocabulary and scoring
+    that has nothing to do with the model itself.
+
+    LIVE tier is gated behind MARKETEYE_AI_EVALS=1 (the same idiom as MARKETEYE_INTEGRATION),
+    calls the real provider for all 50 cases, and asserts the >= 85% gate §5.6 and §10 require.
+    MARKETEYE_AI_EVALS_RECORD=1 rewrites the recordings the offline tier replays.
+
+    No longer a placeholder: dropping IsTestProject/OutputType lets Directory.Build.props' own
+    name-convention rule (*Tests or *Evals) make this a real MTP test project like every other.
+  -->
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\MarketEye.Ai\MarketEye.Ai.csproj" />
+    <ProjectReference Include="..\..\src\MarketEye.Domain\MarketEye.Domain.csproj" />
     <ProjectReference Include="..\..\src\MarketEye.Application\MarketEye.Application.csproj" />
+    <ProjectReference Include="..\..\src\MarketEye.Infrastructure\MarketEye.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\MarketEye.Ai\MarketEye.Ai.csproj" />
   </ItemGroup>
 
   <PropertyGroup>
@@ -21,8 +29,16 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="FluentAssertions" />
+    <PackageReference Include="coverlet.collector" />
+  </ItemGroup>
 
   <ItemGroup>
+    <!-- Cases and recordings ship as content so they exist next to the built test assembly,
+         exactly where the suite reads them from at run time. -->
+    <Content Include="evals\**\*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

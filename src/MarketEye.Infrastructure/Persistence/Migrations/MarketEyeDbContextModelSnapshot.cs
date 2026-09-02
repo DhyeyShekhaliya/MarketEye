@@ -199,6 +199,7 @@ namespace MarketEye.Infrastructure.Persistence.Migrations
                         .HasColumnType("date");
 
                     b.Property<decimal?>("CostOfRevenue")
+                        .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
 
                     b.Property<bool>("IsReportedDateEstimated")
@@ -220,6 +221,7 @@ namespace MarketEye.Infrastructure.Persistence.Migrations
                         .HasColumnType("decimal(18,2)");
 
                     b.Property<decimal?>("SharesOutstanding")
+                        .HasPrecision(24, 4)
                         .HasColumnType("decimal(24,4)");
 
                     b.Property<decimal?>("TotalDebt")
@@ -355,14 +357,6 @@ namespace MarketEye.Infrastructure.Persistence.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
-                    b.Property<string>("DefaultOperator")
-                        .HasMaxLength(24)
-                        .HasColumnType("nvarchar(24)");
-
-                    b.Property<decimal?>("DefaultThreshold")
-                        .HasPrecision(28, 6)
-                        .HasColumnType("decimal(28,6)");
-
                     b.Property<string>("Description")
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");
@@ -442,6 +436,52 @@ namespace MarketEye.Infrastructure.Persistence.Migrations
                     b.ToTable("PriceBars", (string)null);
                 });
 
+            modelBuilder.Entity("MarketEye.Domain.Entities.SavedStrategy", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("CriteriaJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<DateTimeOffset?>("LastRunAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<string>("OriginalPrompt")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("OwnerUserId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name", "OwnerUserId")
+                        .IsUnique();
+
+                    b.ToTable("SavedStrategies", (string)null);
+                });
+
             modelBuilder.Entity("MarketEye.Domain.Entities.ScreenRun", b =>
                 {
                     b.Property<long>("Id")
@@ -456,6 +496,9 @@ namespace MarketEye.Infrastructure.Persistence.Migrations
 
                     b.Property<int>("DurationMs")
                         .HasColumnType("int");
+
+                    b.Property<bool>("FromCache")
+                        .HasColumnType("bit");
 
                     b.Property<int>("ResultCount")
                         .HasColumnType("int");
@@ -531,6 +574,61 @@ namespace MarketEye.Infrastructure.Persistence.Migrations
                         .HasFilter("[IsActive] = 1");
 
                     b.ToTable("Securities", (string)null);
+                });
+
+            modelBuilder.Entity("MarketEye.Domain.Entities.StrategyConceptEntity", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("AliasesCsv")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("DefinitionJson")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsSystem")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("OwnerUserId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name", "OwnerUserId")
+                        .IsUnique();
+
+                    b.ToTable("StrategyConcepts", (string)null);
                 });
 
             modelBuilder.Entity("MarketEye.Domain.Entities.CorporateAction", b =>
