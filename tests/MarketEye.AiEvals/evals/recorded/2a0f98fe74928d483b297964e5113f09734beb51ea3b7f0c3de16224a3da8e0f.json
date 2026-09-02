@@ -1,0 +1,11 @@
+{
+  "concepts": ["large_cap"],
+  "explicit_filters": [
+    {
+      "field": "MarketCap",
+      "operator": "GreaterThan",
+      "value": 50000
+    }
+  ],
+  "clarification": ""
+}

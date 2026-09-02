@@ -1,0 +1,11 @@
+{
+  "concepts": ["profitable"],
+  "explicit_filters": [
+    {
+      "field": "ReturnOnEquity",
+      "operator": "GreaterThan",
+      "value": 20
+    }
+  ],
+  "clarification": ""
+}

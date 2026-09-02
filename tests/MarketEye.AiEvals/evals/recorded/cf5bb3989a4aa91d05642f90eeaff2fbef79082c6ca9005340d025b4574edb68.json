@@ -1,0 +1,11 @@
+{
+  "concepts": [],
+  "explicit_filters": [
+    {
+      "field": "Volume",
+      "operator": "GreaterThan",
+      "value": 500000
+    }
+  ],
+  "clarification": ""
+}

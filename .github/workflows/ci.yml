@@ -5,6 +5,12 @@
 # Enabling them on CI is reasonable later -- GitHub runners are amd64, so no emulation -- but that
 # is a deliberate choice rather than a default. The projects still run here; their container-backed
 # tests report as skipped.
+#
+# MarketEye.AiEvals is also included, and also only runs its OFFLINE tier here: MARKETEYE_AI_EVALS
+# is not set, so the live-provider tier (real model calls, real credits, ~15 minutes) self-skips
+# via the exact same idiom. The offline tier -- replaying recorded model responses through the
+# real parser/resolver/validator -- runs on every PR at zero cost. See .github/workflows/ai-evals.yml
+# for the live ≥85% gate, which runs on its own schedule.
 name: CI
 
 on:
@@ -29,22 +35,26 @@ jobs:
       - name: Build
         run: dotnet build MarketEye.sln -c Release --no-restore
 
-      # Each test project is executed directly rather than through `dotnet test`.
+      # Each test project is executed directly rather than through `dotnet test MarketEye.sln`.
       #
-      # xunit.v3 4.0.0 runs on Microsoft.Testing.Platform *v2*, and the .NET 10 SDK's `dotnet test`
-      # integration speaks MTP v1. The handshake fails silently in the worst possible way: every
-      # project reports "Zero tests ran" and exits 5, so the step goes red while looking like a
-      # tooling error rather than a test failure -- and had it exited 0, CI would have been green
-      # while running nothing at all.
-      #
-      # MTP test projects are self-executing by design, so running them is the supported path and
-      # exit codes propagate normally. Revisit if a future SDK aligns on MTP v2.
+      # `dotnet test MarketEye.sln` failed solution-wide during Phase 2 development: every project
+      # reported "Zero tests ran" and exited 5, so the step went red while looking like a tooling
+      # error rather than a test failure -- and had it exited 0, CI would have been green while
+      # running nothing at all. At the time, MarketEye.AiEvals was still a non-test placeholder
+      # project (IsTestProject=false); once it became a real MTP project (Phase 2 Step 9),
+      # `dotnet test MarketEye.sln` started working correctly again, which points at the malformed
+      # placeholder having broken MTP's multi-project handshake for every project, not a genuine
+      # SDK/xunit.v3 version mismatch as first suspected. That was never rigorously bisected, so
+      # the explicit per-project loop stays -- it is also more debuggable (`::group::` per project)
+      # and costs nothing extra. Safe to simplify back to a single `dotnet test MarketEye.sln` once
+      # someone wants to spend the CI minutes confirming it stays solid.
       - name: Test
         run: |
           for project in \
             tests/MarketEye.UnitTests \
             tests/MarketEye.IntegrationTests \
-            tests/MarketEye.BacktestTests
+            tests/MarketEye.BacktestTests \
+            tests/MarketEye.AiEvals
           do
             echo "::group::$project"
             dotnet run --project "$project" -c Release --no-build

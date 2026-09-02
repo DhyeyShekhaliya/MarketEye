@@ -55,9 +55,10 @@ public static class EvalCases
 
     private static string SourceEvalsRoot()
     {
-        // AppContext.BaseDirectory is .../bin/{Config}/net10.0/. The source tree is four levels up.
+        // AppContext.BaseDirectory is .../MarketEye.AiEvals/bin/{Config}/net10.0/. Three hops up
+        // (net10.0 -> Config -> bin) lands on the project root, where evals/ actually lives.
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        for (var i = 0; i < 4 && dir.Parent is not null; i++) dir = dir.Parent;
+        for (var i = 0; i < 3 && dir.Parent is not null; i++) dir = dir.Parent;
         return Path.Combine(dir.FullName, "evals");
     }
 }

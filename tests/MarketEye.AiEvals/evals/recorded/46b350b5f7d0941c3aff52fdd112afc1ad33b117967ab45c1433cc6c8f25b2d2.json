@@ -1,0 +1,11 @@
+{
+  "concepts": ["oversold"],
+  "explicit_filters": [
+    {
+      "field": "Rsi14",
+      "operator": "LessThan",
+      "value": 20
+    }
+  ],
+  "clarification": ""
+}

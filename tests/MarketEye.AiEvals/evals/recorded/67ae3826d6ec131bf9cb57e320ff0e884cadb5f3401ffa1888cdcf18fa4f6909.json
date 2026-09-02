@@ -1,0 +1,11 @@
+{
+  "concepts": ["high_margin"],
+  "explicit_filters": [
+    {
+      "field": "GrossMargin",
+      "operator": "GreaterThan",
+      "value": 50
+    }
+  ],
+  "clarification": ""
+}

@@ -1,0 +1,11 @@
+{
+  "concepts": ["cheap"],
+  "explicit_filters": [
+    {
+      "field": "PeRatio",
+      "operator": "LessThan",
+      "value": 20
+    }
+  ],
+  "clarification": ""
+}

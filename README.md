@@ -43,16 +43,17 @@ entirely and the screening and backtesting engines still work.
 
 ## Status
 
-**Phase 2 in progress.** The prompt → criteria → results flow described above genuinely works now:
-type a strategy in plain English, confirm the interpreted criteria against your own Strategy
-Vocabulary, and run it. Backtesting (Phase 3) has not started, so the CAGR/Sharpe/drawdown figures
-in the block above remain illustrative.
+**Phase 2 complete.** The prompt → criteria → results flow described above genuinely works: type a
+strategy in plain English, confirm the interpreted criteria against your own Strategy Vocabulary,
+and run it. All three of §10's Phase 2 exit criteria are met, including the `MarketEye.AiEvals`
+≥85% gate — measured at 100.0% on both axes (below). Backtesting (Phase 3) has not started, so the
+CAGR/Sharpe/drawdown figures in the block above remain illustrative.
 
 | Phase | State |
 |---|---|
 | 0 — Foundation | Complete |
 | 1 — Data pipeline + screener | Complete, with three qualified exit criteria (below) |
-| 2 — Intent translation | In progress — screening flow complete; the `MarketEye.AiEvals` ≥85% CI gate is not yet wired up (below) |
+| 2 — Intent translation | Complete, with three exit criteria measured and met (below) |
 | 3 — Backtesting | Not started |
 | 4 — Polish | Not started |
 
@@ -122,15 +123,25 @@ Each of these is a property of the data source rather than a bug, and each is ar
 - **Roughly half the securities carry synthetic identifiers** where no ISIN was recoverable from
   the archive. Ticker-change reconciliation cannot work for those.
 
-### Phase 2 — what's not done yet
+### Phase 2 — exit criteria, measured
 
-One of `PLAN.md` §10's Phase 2 criteria is not met:
+All three of `PLAN.md` §10's Phase 2 criteria are met:
 
 | Criterion | Status |
 |---|---|
 | Unknown concepts fail closed | **Met** — verified by unit tests and by construction: the model's output schema only enumerates concepts that currently exist in the vocabulary |
 | A failed parse asks a question | **Met** — a vague or ambiguous prompt returns a clarifying question, never a guessed screen |
-| `MarketEye.AiEvals` ≥85% eval, gated in CI | **Not yet.** The two-tier offline/live suite structure exists but the 50 cases and recorded fixtures are not complete, so there is no CI gate yet |
+| `MarketEye.AiEvals` ≥85% eval, gated in CI | **Met, measured 2026-09-02.** All 50 cases against NVIDIA NIM (`openai/gpt-oss-20b`): **100.0%** concept-set match, **100.0%** explicit-filter match. `.github/workflows/ai-evals.yml` gates this weekly and on manual dispatch |
+
+That 100% came from correcting the eval, not from favourable recordings — see `PLAN.md` §10's
+Phase 2 exit-status note for the full account. Two findings from that pass are worth knowing before
+trusting the model's judgment on an adversarial prompt: a "list every concept" injection attempt got
+the model to actually comply 3 of 4 repeat calls (a more vaguely-worded attempt refused cleanly
+every time), and one plain concept-only prompt split roughly 50/50 between resolving correctly and
+hedging with an unneeded clarification. Neither reaches an invented threshold — `IntentResolver`
+only ever resolves a concept to its human-vetted definition — but §5.1's guarantee is enforced by
+the system, not reliably by the model's own judgment, and that distinction is the whole reason the
+guarantee is where it is.
 
 Also **the DSL cannot express field-to-field comparisons** (`Close > Sma200`), so a concept like
 "uptrend" is not in the seeded vocabulary. See `PLAN.md` §14 and `docs/adr/0007`.
@@ -210,10 +221,15 @@ Server containers through Testcontainers (roughly 10–12s to first query, emula
 Silicon — see `DEPENDENCIES.md`) and cover the vocabulary, screening pipeline, saved strategies,
 and `IntentTranslationService`'s cache/budget behaviour against a real database.
 
-`MarketEye.AiEvals` (§5.6's ≥85% eval gate) is under active development and is not yet part of a
-clean solution-wide `dotnet test MarketEye.sln` run — its two-tier offline/live structure exists,
-but the 50 recorded cases it replays are not complete. Run the projects above individually until
-that lands.
+```bash
+dotnet test tests/MarketEye.AiEvals                    # 4 tests, offline tier, no key required
+```
+
+`MarketEye.AiEvals` (§5.6's ≥85% eval gate) replays 50 recorded model responses through the real
+parser, resolver and validator — no key, no network, and it runs in the default loop above. The
+live tier that produces those recordings is gated behind `MARKETEYE_AI_EVALS=1` plus `AI_API_KEY`
+and does not run here; see `.github/workflows/ai-evals.yml`, which runs it weekly against the real
+provider and asserts the ≥85% gate (currently measuring 100.0% on both axes).
 
 ## Correctness
 

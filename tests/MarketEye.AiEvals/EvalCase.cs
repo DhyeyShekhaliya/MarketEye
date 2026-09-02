@@ -23,6 +23,9 @@ public sealed record EvalCase
     /// counts as a miss on both axes.
     /// </summary>
     public bool ExpectClarification { get; init; }
+
+    /// <summary>Optional context for a maintainer -- why this case is here, or what to watch for.</summary>
+    public string? Notes { get; init; }
 }
 
 public sealed record ExpectedFilter(string Field, string Operator, decimal Value);

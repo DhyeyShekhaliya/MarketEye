@@ -1,0 +1,11 @@
+{
+  "concepts": ["small_cap"],
+  "explicit_filters": [
+    {
+      "field": "PbRatio",
+      "operator": "LessThan",
+      "value": 1.5
+    }
+  ],
+  "clarification": ""
+}

@@ -37,6 +37,44 @@ public class OfflineReplayTests
         cases.Select(c => c.Prompt).Should().OnlyHaveUniqueItems();
     }
 
+    /// <summary>
+    /// Not a regression check -- a diagnostic. Prints what today's recordings would score against
+    /// cases.json, using the exact same scorer the live tier uses, without spending a single live
+    /// call. Useful to see the number the last live run actually achieved, since a passing
+    /// assertion in <see cref="LiveEvalTests"/> only prints its report on FAILURE.
+    /// </summary>
+    [Fact]
+    public void Print_the_score_the_current_recordings_would_achieve()
+    {
+        var cases = EvalCases.LoadAll();
+        var scores = new List<Scoring.CaseScore>();
+
+        foreach (var testCase in cases)
+        {
+            var path = EvalCases.RecordingPath(testCase.Prompt);
+            if (!File.Exists(path)) continue;
+
+            var parsed = IntentResponseParser.Parse(File.ReadAllText(path));
+            scores.Add(parsed.Outcome switch
+            {
+                // Mirrors LiveEvalTests' own aggregation: an unparseable recording is an explicit
+                // double-failure, never silently excluded from the denominator.
+                ParseOutcome.Parsed p => Scoring.Score(testCase, p.Intent),
+                _ => new Scoring.CaseScore(testCase.Id, false, false, $"unparseable recording: {parsed.Detail}"),
+            });
+        }
+
+        var conceptRate = Scoring.PassRate(scores, s => s.ConceptsCorrect);
+        var filterRate = Scoring.PassRate(scores, s => s.FiltersCorrect);
+        var failureLines = scores.Where(s => !s.ConceptsCorrect || !s.FiltersCorrect)
+            .Select(s => $"  [{s.CaseId}] {s.Detail}");
+
+        Console.WriteLine($"scored {scores.Count}/{cases.Count} recorded cases");
+        Console.WriteLine($"concept-set match:     {conceptRate:F1}% ({scores.Count(s => s.ConceptsCorrect)}/{scores.Count})");
+        Console.WriteLine($"explicit-filter match: {filterRate:F1}% ({scores.Count(s => s.FiltersCorrect)}/{scores.Count})");
+        foreach (var line in failureLines) Console.WriteLine(line);
+    }
+
     [Fact]
     public void Every_recorded_case_still_scores_and_resolves_correctly()
     {

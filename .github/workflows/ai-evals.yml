@@ -1,0 +1,47 @@
+# The live half of the §5.6 eval gate (PLAN.md Phase 2 Step 9).
+#
+# Weekly, not nightly: RequestBudget, ParseCache and the offline replay tier already absorb most
+# of the cost this gate would otherwise add daily, and 50 live calls a night against a finite
+# credit allotment buys no signal the offline tier does not already give on every PR. See
+# src/MarketEye.Ai/AiOptions.cs's provider note for the credit-budget reasoning in full.
+#
+# Secrets are named for the ROLE (AI_*), not the vendor -- switching provider later is a secret
+# change here, never a workflow edit.
+name: AI evals (live)
+
+on:
+  schedule:
+    - cron: "0 3 * * 1" # 03:00 UTC Monday. Off-peak, once a week.
+  workflow_dispatch:
+
+jobs:
+  live-eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Restore
+        run: dotnet restore tests/MarketEye.AiEvals/MarketEye.AiEvals.csproj
+
+      - name: Build
+        run: dotnet build tests/MarketEye.AiEvals/MarketEye.AiEvals.csproj -c Release --no-restore
+
+      - name: Run live eval gate
+        env:
+          MARKETEYE_AI_EVALS: "1"
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          AI_ENDPOINT: ${{ secrets.AI_ENDPOINT }}
+          AI_MODEL: ${{ secrets.AI_MODEL }}
+          # 50 sequential calls at this spacing stay well under a typical free-tier per-minute
+          # cap. Raise it in the repo secret if the account's allowance is tighter than that.
+          MARKETEYE_AI_EVALS_DELAY_MS: "1500"
+        run: |
+          if [ -z "$AI_API_KEY" ]; then
+            echo "::error::AI_API_KEY is not set as a repository secret. This gate cannot run without it."
+            exit 1
+          fi
+          dotnet run --project tests/MarketEye.AiEvals -c Release --no-build

@@ -1,0 +1,11 @@
+{
+  "concepts": ["low_debt"],
+  "explicit_filters": [
+    {
+      "field": "DebtToEquity",
+      "operator": "LessThan",
+      "value": 0.3
+    }
+  ],
+  "clarification": ""
+}
