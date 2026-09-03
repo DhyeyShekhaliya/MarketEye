@@ -23,210 +23,145 @@
        Sharpe        1.03     vs SPY TR  +2.1%
 ```
 
-> The figures above are **illustrative**, showing the shape of the output. They are not
-> measured results and no strategy has been run. Measured §9 benchmark numbers replace this
-> block once Phase 1 is complete — see *Benchmarks* below.
+> The figures above are **illustrative**, showing the shape of the output — not measured results,
+> and no specific strategy was run to produce them. See *Benchmarks* below for why no performance
+> numbers are published, and the `Getting started` section for how to run a real screen or backtest.
 
 **Educational purposes only. Not investment advice.**
 
-## The idea
+## Architecture
 
 The model sits at the edge of the system, not the middle. It reads prose and emits *concept names*
 plus any number the user stated themselves. It never emits SQL, and it never invents a financial
 threshold — "cheap" resolves from a Strategy Vocabulary table you can inspect and edit at
 `/vocabulary`, not from the model's opinion. A concept the model returns that is not in that table
-is a hard validation failure, never a silent fallback. (Two tables sit behind this, one system-owned
-and one yours to edit — `docs/adr/0007` argues why.)
+is a hard validation failure, never a silent fallback. Two tables sit behind this — `MetricConcepts`
+(system-owned, sealed) and `StrategyConcepts` (user-editable) — `docs/adr/0007` argues why they're
+split rather than one.
 
 Everything downstream of the validator is deterministic. The model can be swapped, removed, or fail
-entirely and the screening and backtesting engines still work.
+entirely and the screening and backtesting engines still work — with `Ai:ApiKey` unset, parsing
+falls back to a deterministic keyword parser and the rest of the app is unaffected.
 
-## Status
+Every screen and backtest resolves against a sealed `DataSnapshot`, never a live table. Ingestion
+writes, then seals; a query only ever sees a snapshot that finished successfully. This is what makes
+a `ScreenRun`/`BacktestRun` reproducible forever, gives the result cache a free invalidation key (a
+new snapshot id is automatically a cache miss for every criteria that ran against the old one), and
+means a night that dies partway through leaves an unsealed row nothing ever reads (`docs/adr/0012`).
 
-**Phase 2 complete. Phase 3 done and verified against real data.** The prompt → criteria → results
-flow described above genuinely works: type a strategy in plain English, confirm the interpreted
-criteria against your own Strategy Vocabulary, and run it. All three of §10's Phase 2 exit criteria
-are met, including the `MarketEye.AiEvals` ≥85% gate — measured at 100.0% on both axes (below).
-Backtesting runs end to end — `/backtest` builds a `BacktestDefinition` from a saved strategy, runs
-the full §7 rebalance loop (T+1 execution, India-calibrated costs and slippage, circuit-lock and
-delisting handling, dividend accrual) and renders the equity curve, assumptions panel, and
-gross/net metrics. §8.1's synthetic-market suite and §8.3's known-bad-strategy suite both pass
-against a real SQL Server, and caught a real split-adjustment bug during development (below). The
-backfill-snapshot gap that used to block real historical backtests is fixed and the local 5-year
-dataset is fully sealed — a real 3-year, quarterly-rebalanced backtest against actual NSE data ran
-end to end (below), and that same live run caught a second real bug in gross-vs-net reporting,
-also now fixed (below). The CAGR/Sharpe/drawdown figures in the block above are still illustrative
-placeholder numbers, not results from a specific published run — but the engine producing real
-numbers like them is no longer hypothetical.
+## Features
 
-| Phase | State |
-|---|---|
-| 0 — Foundation | Complete |
-| 1 — Data pipeline + screener | Complete, with three qualified exit criteria (below) |
-| 2 — Intent translation | Complete, with three exit criteria measured and met (below) |
-| 3 — Backtesting | Complete — §10 exit criteria met and verified against a real multi-year backtest (below) |
-| 4 — Polish | In progress — alerts, strategy sharing, and a second benchmark are built and tested (below); README/ADR work is what you're reading |
+### Intent translation and vocabulary
 
-`PLAN.md` §10 builds the foundation before the flashy part on purpose, because the foundation is
-what makes the rest credible — Phase 2 is where that argument gets tested for real.
-
-### What Phase 2 delivers
-
-- **A prompt turns into criteria, never SQL.** The model (§5.1) emits *concept names* — `cheap`,
-  `profitable`, `small_cap` — plus a numeric filter only where you stated the number yourself.
-  "Cheap" resolving to `P/E < 25 AND P/B < 3` comes from a table you can read and edit, not from
-  the model's opinion, and a concept the model names that isn't in that table is a hard failure,
-  never a substitution
+- A prompt turns into concept names, never SQL. The model emits names like `cheap`, `profitable`,
+  `small_cap`, plus a numeric filter only where the user stated the number themselves. "Cheap"
+  resolving to `P/E < 25 AND P/B < 3` comes from a table anyone can read and edit, not from the
+  model's opinion; a concept the model names that isn't in that table is a hard failure, never a
+  substitution.
 - **Strategy Vocabulary** (`/vocabulary`) — 18 seeded concepts, India-calibrated, each editable or
-  disableable without a deploy. Two tables under the hood, `MetricConcepts` (system, sealed) and
-  `StrategyConcepts` (yours to edit) — `docs/adr/0007` argues why they're split rather than one
+  disableable without a deploy.
 - **Interpretation panel** (`/screen`) — confirm-before-run: every resolved concept, its
-  definition, and any place your own number overrode the vocabulary's default, rendered before
-  anything executes. Nothing runs from an unconfirmed parse
-- **Fails closed, asks rather than guesses.** An unknown or disabled concept is rejected, never a
-  nearest match. A vague prompt ("good stocks") returns a clarifying question instead of a screen
-  over the whole universe
+  definition, and any place a user-supplied number overrode the vocabulary's default, rendered
+  before anything executes. Nothing runs from an unconfirmed parse.
+- Fails closed rather than guessing: an unknown or disabled concept is rejected, never a nearest
+  match; a vague prompt ("good stocks") returns a clarifying question instead of screening the
+  whole universe.
+- Two-level caching and rate limiting — 10 parses/min and 100/day per caller, repeated prompts and
+  repeated screens both served from cache, with a database-backed daily call cap as protection
+  against burning through a finite LLM credit allotment.
+- `MarketEye.AiEvals` — a 50-case prompt-to-expected-criteria suite, gated in CI at ≥85% on both
+  concept-set match and explicit-filter match (`.github/workflows/ai-evals.yml`, weekly and on
+  manual dispatch). One caveat worth knowing before trusting the model's judgment on an adversarial
+  prompt: a "list every concept" injection attempt has been observed getting the model to actually
+  comply on some repeat calls, not others — `IntentResolver` bounds the blast radius regardless,
+  since it only ever resolves a named concept to its human-vetted definition and never reaches an
+  invented threshold, but the guarantee is enforced by the system, not reliably by the model.
+
+### Saved strategies and sharing
+
 - **Saved strategies** (`/strategies`, `/api/strategies`) — stores the resolved criteria, not the
-  prompt, so a saved strategy reproduces exactly even if the vocabulary changes later
-- **Two-level caching and rate limiting** (§5.4, §5.5) — 10 parses/min and 100/day per caller,
-  repeated prompts and repeated screens both served from cache, with a database-backed daily call
-  cap as the real protection against burning through a finite LLM credit allotment
-- **Runs with no AI configured at all.** No `Ai:ApiKey` set means natural-language parsing falls
-  back to a deterministic keyword parser — the manual filter builder and the whole rest of the app
-  are unaffected, proving §2's claim that the model can be removed and the system below still works
-
-### What Phase 3 delivers so far
-
-- **The full §7 rebalance loop** (`BacktestEngine`) — point-in-time universe resolution (reusing
-  the screening engine's existing delisted-inclusive join, not a second implementation), T+1
-  execution, equal-weight target allocation, dividend accrual, and delisting exits at last price
-  (or zero for bankruptcy)
-- **Circuit-lock handling** (§7 revision 3) — a locked bar cannot be filled; the engine skips it
-  and searches forward within the same 5-day window missing prices use, dropping and logging the
-  trade if nothing fillable turns up. `PointInTimeGuard.RequireNotCircuitLocked` closes the last
-  gap in §8.2's guard table — all six guards now exist and throw rather than silently correct
-  (`docs/adr/0008`)
-- **Gross vs. net, computed honestly, not approximated.** Costs compound into share counts rather
-  than being a simple end-of-period subtraction, so the engine runs the whole simulation twice —
-  once at the configured India-calibrated 23bps + 5bps, once at zero — to report `CagrGross` and
-  `CagrNet` side by side, exactly as §7 requires (`docs/adr/0009`)
-- **CAGR, max drawdown, Sharpe, Sortino, win rate, and annualised turnover** (`BacktestMetricsCalculator`),
-  hand-rolled `decimal`/`double` arithmetic with no new dependency, consistent with the existing
-  indicator math's style
-- **NIFTY 50 total-return benchmark comparison**, sourced from a manually-loaded CSV rather than a
-  scraper (`NiftyTotalReturnLoader`, `docs/adr/0010`) — a config string, not an `IBenchmarkProvider`
-  interface, per §14's already-recorded decision. Missing benchmark data degrades to "no data"
-  rather than failing the run
-- **`/backtest`** — pick a saved strategy and a date range, run it, and see the equity curve next
-  to an assumptions panel sourced directly from what actually ran, never a hand-typed copy
-
-### Verified — §8.1 and §8.3, both against a real SQL Server
-
-The §8.1 synthetic-market suite (`MarketEye.BacktestTests/SyntheticMarket`, Docker-gated) — three
-securities, a 2-for-1 split, a dividend, and a bankruptcy delisting, hand-computed against a real
-SQL Server. Building it caught a genuine bug before any real backtest could hit it: the engine
-marks positions at raw `Close` (§4.4, §7) as it should, but a split or bonus issue changes both the
-share count and the price together — without adjusting the held share count on the action's
-effective date, a split would have shown as an artificial ~50% value drop that never happened
-economically. `BacktestPriceRepository.GetShareAdjustingActionsAsync` now applies Split/Bonus/
-Rights `AdjustmentFactor`s to held positions during the day-walk, and
-`SyntheticMarketEngineTests.A_stock_split_does_not_create_a_fake_value_drop` pins the fix. This is
-exactly the failure mode §8.1 exists to catch, caught by writing the suite rather than in production.
-
-The §8.3 known-bad-strategy suite (`KnownBadStrategyTests`, same folder) runs three scenarios: a
-negative-earnings + high-leverage + high-price screen loses money; buying the worst momentum
-(deeply oversold names that keep falling, not bouncing) loses money; and an indiscriminate,
-no-edge four-security basket (two winners, two losers, equal-weighted) lands at exactly its
-hand-computed blended average — 204,000 from 200,000, neither inflated nor deflated. "If
-everything you test looks profitable, that's a bug" (§8.3) now has a suite that would catch it.
-
-Both suites, plus the pre-existing bias guards, run green: `MARKETEYE_INTEGRATION=1 dotnet test
-tests/MarketEye.BacktestTests` passes all 20.
-
-### Two real bugs, found by actually running the thing — both fixed
-
-**1. The backfill-snapshot gap is fixed.** The historical backfill (§10 Phase 1) used to seal
-exactly one `DataSnapshot` for its whole date range rather than one per day, so
-`SnapshotLifecycle.LatestSealedAsync` — which `BacktestEngine` correctly reuses from the screening
-path — could only resolve the single date that backfill sealed. `/api/backtest` against an earlier
-historical window degraded gracefully (warned, skipped every rebalance, flat curve, no crash) but
-couldn't exercise a real multi-year strategy against the ~2.5M bars already sitting in `PriceBars`.
-Fixed with `SnapshotLifecycle.SealHistoricalSnapshotsAsync` — `BackfillService` now seals a
-snapshot per ingested day going forward, and the same method is exposed as
-`POST /api/ingest/seal-historical-snapshots` to repair an already-backfilled range without
-re-fetching anything. Run once locally over 2021-09-01–2026-09-01: **1,169 snapshots sealed in ~7
-seconds.**
-
-**2. A live multi-year backtest then caught a second bug: gross could come back higher than net.**
-Running `/api/backtest` for real — a 10-position, quarterly-rebalanced NSE screen over
-2022-01-03–2024-12-31 — surfaced `CagrNet` (7.5%) higher than `CagrGross` (3.5%), which is
-impossible with non-negative costs. The cause: the original design ran gross and net as two
-independent simulations, but weight-based rebalancing resizes every trade against the *current*
-portfolio value, so the lower net-of-costs value produced a genuinely different share count than
-the zero-cost run from the second rebalance onward — the two paths diverged, not just by a cash
-offset. All 20 `MarketEye.BacktestTests` stayed green throughout, because the §8.1/§8.3 fixtures
-are deliberately single-rebalance and never had a second rebalance for the paths to diverge across.
-Fixed by running the simulation once and deriving gross as `netNav + cumulativeCostsPaid` at every
-point on the same trading path — `CagrNet <= CagrGross` now holds by construction. Re-verified live
-after the fix: `CagrGross 5.57% >= CagrNet 5.11%` on the same 3-year backtest. Full account in
-`docs/adr/0009`.
-
-### What Phase 4 delivers
-
-- **Alerts, as an in-app feed, not email.** A nightly job (`AlertCheckJob`, invoked by the same
-  shared-secret-protected cron pattern §10 Phase 1's ingestion trigger already established) replays
-  every saved strategy against the newest sealed snapshot and diffs its matched securities against
-  the immediately preceding run. Every entry and exit becomes an `AlertEvent`, visible on `/alerts`.
-  A strategy's first-ever check writes no events by design — there is nothing yet to compare
-  against, so day one of a new strategy is silent rather than a flood of "everything just entered."
-  The diff itself (`AlertSetDiffer`, `MarketEye.Application`) is pure set arithmetic, unit-tested in
-  isolation from the database plumbing around it (`AlertDiffer`, `MarketEye.Infrastructure`).
-- **Strategy sharing, as read-only links, not accounts.** No login system was built — §14 leaves
-  full multi-user auth an open question, and building it was judged out of scope for a 2-3 week
-  polish phase. Instead, a saved strategy can be given an unguessable share token
+  prompt, so a saved strategy reproduces exactly even if the vocabulary changes later.
+- **Read-only share links** — a saved strategy can be given an unguessable share token
   (`POST /api/strategies/{name}/share`); anyone holding the resulting `/shared/{token}` link sees
-  the interpreted criteria and the strategy's last backtest, rendered read-only, with no path to
-  edit, delete, or re-run with different criteria reachable from that route at all.
-- **A second benchmark is now genuinely a config row, not a code change.** `NiftyTotalReturnLoader`
-  no longer hardcodes `NIFTY50TR` — it takes the ticker as a parameter, so loading NIFTY 500 TR (or
-  any other niftyindices.com total-return export) from the same manually-downloaded-CSV mechanism
-  `docs/adr/0010` already established is a second call with a different ticker, not new code.
-  `/backtest`'s benchmark field is a dropdown of whatever is actually loaded into `BenchmarkPrices`
-  once anything has been, falling back to the original free-text input otherwise.
-- **Three retroactive ADRs** close the gap `PLAN.md` §11 left open: pre-computed indicators
-  (`docs/adr/0011`), sealed data snapshots (`docs/adr/0012`), and the tree-shaped DSL with a flat
-  v1 compiler (`docs/adr/0013`) — all three document decisions already shipped in Phase 1, argued
-  properly for the first time rather than left implicit in code comments.
+  the interpreted criteria and the strategy's last backtest, rendered read-only. The public route
+  has no mutating verb reachable from it at all — no edit, delete, or re-run with different
+  criteria — and there is no login system behind any of this; a token is the entire trust model.
 
-### What Phase 1 actually delivered
+### Screening DSL
+
+`ScreenCriteria` is a tree-shaped DSL (`Group`/`Comparison`, PLAN.md §6) with a fail-closed
+validator (field whitelist, per-field operator whitelist, per-field ranges, max tree depth, max
+comparison count) and a compiler that emits parameterised SQL — the model never emits SQL, so
+injection is structurally impossible rather than filtered. The type and validator already walk a
+full tree today; the v1 compiler accepts only a flat `AND` (`docs/adr/0013`), so a criteria naming
+`OR`/`NOT` fails at compile time with a message naming the unsupported operator, not silently.
+
+### Backtesting
+
+- The full rebalance loop (`BacktestEngine`) — point-in-time universe resolution (reusing the
+  screening engine's delisted-inclusive join), T+1 execution, equal-weight target allocation,
+  dividend accrual, and delisting exits at last price (or zero for bankruptcy).
+- Circuit-lock handling — a locked bar cannot be filled; the engine skips it and searches forward
+  within the same 5-day window missing prices use, dropping and logging the trade if nothing
+  fillable turns up.
+- Split/bonus/rights adjustment factors are applied to held share counts during the day-walk, in
+  step with the price they affect — marking positions at raw `Close` without adjusting the held
+  share count on a split's effective date would show an artificial value drop that never happened
+  economically.
+- Gross vs. net costs are computed from a single simulation, not two independent ones: the engine
+  runs once at the configured costs and derives the gross curve as `netNav + cumulativeCostsPaid`
+  at every point on the same trading path. This guarantees `CagrNet <= CagrGross` by construction,
+  since non-negative costs are the only thing separating the two curves at any point.
+- `CAGR`, max drawdown, Sharpe, Sortino, win rate, and annualised turnover
+  (`BacktestMetricsCalculator`), hand-rolled `decimal`/`double` arithmetic with no new dependency.
+- Benchmark comparison against a total-return index series, sourced from a manually-loaded CSV
+  rather than a scraper (`NiftyTotalReturnLoader`, `docs/adr/0010`) — a config string
+  (`BacktestDefinition.BenchmarkTicker`), not an `IBenchmarkProvider` interface. The loader takes
+  the ticker as a parameter, so loading a second benchmark (e.g. NIFTY 500 TR) from the same
+  manual-CSV mechanism is a second call with a different ticker, not new code. Missing benchmark
+  data degrades to "no data" rather than failing the run; `/backtest`'s benchmark field is a
+  dropdown of whatever is actually loaded into `BenchmarkPrices`, falling back to a free-text input
+  when nothing has been loaded yet.
+- `/backtest` — pick a saved strategy and a date range, run it, and see the equity curve next to an
+  assumptions panel sourced directly from what actually ran, never a hand-typed copy.
+
+### Alerts
+
+A scheduled job (`AlertCheckJob`, invoked by a shared-secret-protected endpoint on the same cron
+pattern as nightly ingestion) replays every saved strategy against the newest sealed snapshot and
+diffs its matched securities against the immediately preceding run. Every entry and exit becomes an
+`AlertEvent`, visible on `/alerts`. A strategy's first-ever check writes no events — there is
+nothing yet to compare against, so a newly saved strategy's first night is silent rather than a
+flood of "everything just entered." The diff itself (`AlertSetDiffer`, `MarketEye.Application`) is
+pure set arithmetic, kept separate from the database orchestration around it (`AlertDiffer`,
+`MarketEye.Infrastructure`) so it is unit-testable without a database.
+
+### Home page ticker
+
+The homepage shows a live-delayed NIFTY 50 quote and a one-month sparkline, read from Yahoo
+Finance's public chart endpoint on page load and on manual refresh — never polled on a timer. This
+is isolated to the Web project and to this one page: no screen, backtest, or alert reads from it,
+and every correctness guarantee elsewhere in the system still depends only on MarketEye's own
+sealed data snapshots and NSE ingestion.
+
+## Data pipeline
 
 - **Prices and universe** from the NSE bhavcopy archive — survivorship-free by construction, since
-  a company that delisted in 2022 still appears in every file up to its last trading day
-- **Indicators** (SMA, EMA, RSI, MACD, ATR, realised volatility) computed at ingest and tested
-  against published reference values, not against their own output
-- **Corporate actions** — splits, bonus issues, rights issues and dividends, each with its own
-  adjustment convention, plus a reconciliation that checks stored factors against the price step
-  the market actually made
-- **Fundamentals** in a SQL Server temporal table, with derived valuation ratios
-- **`ScreenCriteria`** — a tree-shaped DSL with a fail-closed validator and a compiler that emits
-  parameterised SQL, so injection is structurally impossible rather than filtered
-- **Bias guards** that throw in the repository layer rather than relying on convention
+  a company that delisted still appears in every file up to its last trading day.
+- **Indicators** (SMA, EMA, RSI, MACD, ATR, realised volatility) computed at ingest and stored,
+  never at query time, and tested against published reference values rather than their own output
+  (`docs/adr/0011`).
+- **Corporate actions** — splits, bonus issues, rights issues, and dividends, each with its own
+  adjustment convention, reconciled against the price step the market actually made on the ex-date.
+- **Fundamentals** in a SQL Server temporal table (`FOR SYSTEM_TIME` plus a reporting-date filter,
+  so a restatement or reporting lag can never leak into a historical read), with derived valuation
+  ratios.
+- **Bias guards** (`PointInTimeGuard`) throw in the repository layer rather than relying on
+  convention or code review.
 
-### Qualified exit criteria — stated, not hidden
+## Known limitations
 
-Three of `PLAN.md` §10's Phase 1 criteria are not fully met, and pretending otherwise would
-undermine the point of the rest:
-
-| Criterion | Status |
-|---|---|
-| Nightly job unattended for a week | Ran locally, ~250 sessions, no intervention. **Not met on Azure** — the deployed cron fails, most likely NSE refusing a datacentre IP |
-| §9 performance benchmarks | **Dropped by decision.** No valid measurement surface exists — see Benchmarks below |
-| Splits/dividends verified across 20 securities | Method built and proven; it found four real defects. But the deployed one-year window contains too few splits and bonuses to reach 20 securities. Satisfiable against the local five-year dataset |
-
-### Known limitations
-
-Each of these is a property of the data source rather than a bug, and each is argued in
-`docs/adr/0005`:
+Each of these is a property of the data source or the current deployment, not a design flaw:
 
 - **Reporting dates are estimated.** The fundamentals provider supplies no filing date, so it is
   derived from SEBI deadlines and deliberately errs late. Fundamentals screening is therefore
@@ -235,29 +170,12 @@ Each of these is a property of the data source rather than a bug, and each is ar
   "profitable" answers *was profitable in the last reported financial year*.
 - **Roughly half the securities carry synthetic identifiers** where no ISIN was recoverable from
   the archive. Ticker-change reconciliation cannot work for those.
-
-### Phase 2 — exit criteria, measured
-
-All three of `PLAN.md` §10's Phase 2 criteria are met:
-
-| Criterion | Status |
-|---|---|
-| Unknown concepts fail closed | **Met** — verified by unit tests and by construction: the model's output schema only enumerates concepts that currently exist in the vocabulary |
-| A failed parse asks a question | **Met** — a vague or ambiguous prompt returns a clarifying question, never a guessed screen |
-| `MarketEye.AiEvals` ≥85% eval, gated in CI | **Met, measured 2026-09-02.** All 50 cases against NVIDIA NIM (`openai/gpt-oss-20b`): **100.0%** concept-set match, **100.0%** explicit-filter match. `.github/workflows/ai-evals.yml` gates this weekly and on manual dispatch |
-
-That 100% came from correcting the eval, not from favourable recordings — see `PLAN.md` §10's
-Phase 2 exit-status note for the full account. Two findings from that pass are worth knowing before
-trusting the model's judgment on an adversarial prompt: a "list every concept" injection attempt got
-the model to actually comply 3 of 4 repeat calls (a more vaguely-worded attempt refused cleanly
-every time), and one plain concept-only prompt split roughly 50/50 between resolving correctly and
-hedging with an unneeded clarification. Neither reaches an invented threshold — `IntentResolver`
-only ever resolves a concept to its human-vetted definition — but §5.1's guarantee is enforced by
-the system, not reliably by the model's own judgment, and that distinction is the whole reason the
-guarantee is where it is.
-
-Also **the DSL cannot express field-to-field comparisons** (`Close > Sma200`), so a concept like
-"uptrend" is not in the seeded vocabulary. See `PLAN.md` §14 and `docs/adr/0007`.
+- **The DSL cannot express field-to-field comparisons** (`Close > Sma200`), so a concept like
+  "uptrend" is not in the seeded vocabulary — see `docs/adr/0013` and `PLAN.md` §14.
+- **The Azure-deployed nightly ingestion cron currently fails**, most likely because NSE refuses a
+  datacentre IP. It runs unattended and reliably against a local database.
+- **The Azure-deployed dataset currently holds about one year of history**; the full five-year
+  dataset (3,481 securities, ~2.5M bars) exists in the local database.
 
 ## Getting started
 
@@ -287,7 +205,7 @@ Then, separately, `dotnet run --project src/MarketEye.Web` and open `http://loca
 
 ```bash
 curl localhost:5199/health              # Healthy
-dotnet test tests/MarketEye.UnitTests   # 269 tests, no Docker required
+dotnet test tests/MarketEye.UnitTests   # no Docker required
 ```
 
 Ingestion and screening:
@@ -304,6 +222,9 @@ curl -X POST -H "X-Ingest-Secret: $SECRET" "localhost:5199/api/ingest/fundamenta
 
 # Verify adjustment factors against the market's own repricing
 curl "localhost:5199/api/reconcile/corporate-actions?securities=25"
+
+# Nightly alert check -- diffs every saved strategy against the latest sealed snapshot
+curl -X POST -H "X-Ingest-Secret: $SECRET" "localhost:5199/api/alerts/check"
 ```
 
 Natural-language screening, end to end — works with or without an `Ai:ApiKey` (the keyword fallback
@@ -320,43 +241,49 @@ curl -X POST localhost:5199/api/screen -H 'Content-Type: application/json' \
 ```
 
 Or in the browser: `/screen` for the interpretation panel and the manual filter builder,
-`/vocabulary` to read or edit what a word like "cheap" means, `/strategies` to save, re-run, and
-delete named screens, `/backtest` to run a saved strategy through the full §7 rebalance loop and
-see its equity curve, assumptions, and gross/net metrics.
+`/vocabulary` to read or edit what a word like "cheap" means, `/strategies` to save, re-run, share,
+and delete named screens, `/backtest` to run a saved strategy through the full rebalance loop and
+see its equity curve, assumptions, and gross/net metrics, `/alerts` for entry/exit history per
+saved strategy, and `/shared/{token}` for a strategy someone else shared with you.
+
+## Testing
 
 ```bash
-dotnet test tests/MarketEye.BacktestTests             # 13 tests, no Docker required
-MARKETEYE_INTEGRATION=1 dotnet test tests/MarketEye.BacktestTests    # 20 tests (+4 synthetic-market, +3 known-bad), needs Docker
-MARKETEYE_INTEGRATION=1 dotnet test tests/MarketEye.IntegrationTests   # 34 tests, needs Docker running
-# On a resource-constrained host (e.g. Apple Silicon, where SQL Server runs emulated), running every
-# class's own Testcontainers instance in parallel can exhaust the container's memory and produce
-# spurious SQL Server startup failures unrelated to the tests themselves. Run sequentially if so:
-#   dotnet exec tests/MarketEye.IntegrationTests/bin/Debug/net10.0/MarketEye.IntegrationTests.dll -parallelMode none
+dotnet test tests/MarketEye.UnitTests                                  # no Docker required
+dotnet test tests/MarketEye.BacktestTests                              # no Docker required
+MARKETEYE_INTEGRATION=1 dotnet test tests/MarketEye.BacktestTests      # adds the synthetic-market
+                                                                        # and known-bad-strategy suites
+MARKETEYE_INTEGRATION=1 dotnet test tests/MarketEye.IntegrationTests   # needs Docker running
 ```
 
 `MarketEye.IntegrationTests`' container-backed tests are skipped unless `MARKETEYE_INTEGRATION=1`
 is set — a bare `dotnet test` never needs Docker. When set, they start their own throwaway SQL
 Server containers through Testcontainers (roughly 10–12s to first query, emulated on Apple
 Silicon — see `DEPENDENCIES.md`) and cover the vocabulary, screening pipeline, saved strategies,
-and `IntentTranslationService`'s cache/budget behaviour against a real database.
-
-`MarketEye.BacktestTests` follows the same pattern for its §8.1/§8.3 suites: 13 bias-guard tests
-run with no Docker; `MARKETEYE_INTEGRATION=1` additionally runs 4 §8.1 synthetic-market tests
-(three securities, a hand-computed split/dividend/bankruptcy delisting, asserting `BacktestEngine`'s
-output exactly — including that a stock split does not create a fake value drop, the specific
-regression this suite caught) and 3 §8.3 known-bad-strategy tests (bad fundamentals lose money,
-worst momentum loses money, a no-edge basket lands at exactly its blended average) against a real
-SQL Server.
+strategy sharing, alert checks, benchmark loading, and `IntentTranslationService`'s cache/budget
+behaviour against a real database. On a resource-constrained host, running every test class's own
+container in parallel can exhaust available memory and produce spurious SQL Server startup
+failures unrelated to the tests themselves — run sequentially if so:
 
 ```bash
-dotnet test tests/MarketEye.AiEvals                    # 4 tests, offline tier, no key required
+dotnet exec tests/MarketEye.IntegrationTests/bin/Debug/net10.0/MarketEye.IntegrationTests.dll -parallelMode none
 ```
 
-`MarketEye.AiEvals` (§5.6's ≥85% eval gate) replays 50 recorded model responses through the real
-parser, resolver and validator — no key, no network, and it runs in the default loop above. The
-live tier that produces those recordings is gated behind `MARKETEYE_AI_EVALS=1` plus `AI_API_KEY`
-and does not run here; see `.github/workflows/ai-evals.yml`, which runs it weekly against the real
-provider and asserts the ≥85% gate (currently measuring 100.0% on both axes).
+`MarketEye.BacktestTests` follows the same pattern: bias-guard tests run with no Docker;
+`MARKETEYE_INTEGRATION=1` additionally runs synthetic-market tests (three securities, a
+hand-computed split/dividend/bankruptcy delisting, asserting `BacktestEngine`'s output exactly)
+and known-bad-strategy tests (bad fundamentals lose money, worst momentum loses money, a no-edge
+basket lands at exactly its blended average) against a real SQL Server.
+
+```bash
+dotnet test tests/MarketEye.AiEvals   # offline tier, no key required
+```
+
+`MarketEye.AiEvals` replays 50 recorded model responses through the real parser, resolver and
+validator — no key, no network, and it runs in the default loop above. The live tier that produces
+those recordings is gated behind `MARKETEYE_AI_EVALS=1` plus `AI_API_KEY` and does not run here;
+see `.github/workflows/ai-evals.yml`, which runs it against the real provider and asserts the
+≥85% gate.
 
 ## Correctness
 
@@ -388,21 +315,28 @@ provider's text. Disagreement means one of them is wrong — usually the text, b
 adjustment is applied. That leaves a real step in the price series, which someone will notice — far
 better than a smooth series computed from a guessed factor.
 
+**Gross-vs-net cost reporting cannot invert.** Both curves are derived from one simulation, so
+`CagrNet <= CagrGross` holds by construction rather than by two independent runs happening to agree.
+
 ## Benchmarks
 
-**Outstanding.** No performance numbers are published, by design.
-
-`PLAN.md` §9 defines the target precisely — p95 under 500ms for a 10-comparison screen over a
-500-security universe against a sealed snapshot of five years of daily bars. The dataset to run it
-against exists: 3,481 securities and ~2.5M bars are ingested.
+**No performance numbers are published.** `PLAN.md` §9 defines the target precisely — p95 under
+500ms for a 10-comparison screen over a 500-security universe against a sealed snapshot of five
+years of daily bars. The dataset to run it against exists locally: 3,481 securities and ~2.5M bars.
 
 What does not exist is a valid place to measure. The local SQL Server runs emulated on Apple
-Silicon (no arm64 image); App Service F1 is shared infrastructure with a 60 CPU-minute daily cap
-and cold starts; and the free Azure SQL tier auto-pauses. Numbers from any of those would describe
-the hardware, not the system.
+Silicon (no arm64 image); the deployed App Service F1 tier is shared infrastructure with a
+60 CPU-minute daily cap and cold starts; and the free Azure SQL tier auto-pauses. Numbers from any
+of those would describe the hardware, not the system. Performance claims here are measured or
+absent, never estimated — see `docs/adr/0006`.
 
-This project's rule is that performance claims are measured or absent — never estimated. So this
-section stays empty until there is a surface worth measuring on. See `docs/adr/0006`.
+## Deployment
+
+Both apps deploy independently to Azure App Service (F1 free tier) via GitHub Actions on push to
+`main` — see `docs/azure-deployment-runbook.md` for the API and `docs/azure-deployment-web-runbook.md`
+for the Blazor frontend, including the one-time Azure/GitHub setup each requires and the specific
+failure modes (SQL firewall, serverless auto-pause, forwarded-headers/HTTPS redirect loops, stale
+deployment artifacts) already worked through for this app.
 
 ## Layout
 
@@ -416,11 +350,11 @@ src/
   MarketEye.Ai/                LLM client, concept resolution, parse cache, rate limiter
   MarketEye.Ingestion/        scheduled jobs, corporate actions, snapshot sealing, alert checks
   MarketEye.Api/              ASP.NET Core Web API
-  MarketEye.Web/              Blazor Server UI
+  MarketEye.Web/              Blazor Server UI, incl. MarketData/ (homepage ticker client)
 tests/
   MarketEye.UnitTests/        indicator math, compiler, validator, architecture guards
   MarketEye.IntegrationTests/ Testcontainers + real SQL Server
-  MarketEye.BacktestTests/    bias guards + §8.1/§8.3 suites (13 tests + 7 Docker-gated)
+  MarketEye.BacktestTests/    bias guards + synthetic-market/known-bad-strategy suites
   MarketEye.AiEvals/          prompt → expected-criteria suite, CI gate
 ```
 
