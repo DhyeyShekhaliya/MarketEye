@@ -161,7 +161,7 @@ public class KnownBadStrategyTests : IAsyncLifetime
             ],
         };
 
-        var run = await BuildEngine().RunAsync(BuildDefinition(root, 200_000m), ct);
+        var run = await BuildEngine().RunAsync(BuildDefinition(root, 200_000m), null, ct);
 
         run.Rebalances.Should().HaveCount(1);
         run.Rebalances[0].HoldingsJson.Should().Contain("BAD1").And.Contain("BAD2");
@@ -198,7 +198,7 @@ public class KnownBadStrategyTests : IAsyncLifetime
             Children = [new Comparison { Field = "Rsi14", Operator = ComparisonOperator.LessThan, Value = 15m }],
         };
 
-        var run = await BuildEngine().RunAsync(BuildDefinition(root, 200_000m), ct);
+        var run = await BuildEngine().RunAsync(BuildDefinition(root, 200_000m), null, ct);
 
         run.Rebalances.Should().HaveCount(1);
         run.Rebalances[0].HoldingsJson.Should().Contain("WORST1").And.Contain("WORST2");
@@ -245,7 +245,7 @@ public class KnownBadStrategyTests : IAsyncLifetime
             Children = [new Comparison { Field = "ClosePrice", Operator = ComparisonOperator.GreaterThan, Value = 0m }],
         };
 
-        var run = await BuildEngine().RunAsync(BuildDefinition(root, 200_000m), ct);
+        var run = await BuildEngine().RunAsync(BuildDefinition(root, 200_000m), null, ct);
 
         run.Rebalances.Should().HaveCount(1);
         run.Rebalances[0].HoldingsJson

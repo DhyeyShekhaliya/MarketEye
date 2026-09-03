@@ -175,7 +175,7 @@ public class ScreeningPipelineTests : IAsyncLifetime
             },
         };
 
-        var result = await engine.RunAsync(criteria, snap, ct);
+        var result = await engine.RunAsync(criteria, snap, null, ct);
 
         result.Rows.Select(r => r.Ticker).Should().Contain("GAMMA",
             "GAMMA was trading on 2024-01-31; excluding it is survivorship bias (§7, §8.2)");
@@ -226,7 +226,7 @@ public class ScreeningPipelineTests : IAsyncLifetime
             },
         };
 
-        var result = await engine.RunAsync(criteria, snap, ct);
+        var result = await engine.RunAsync(criteria, snap, null, ct);
 
         result.Rows.Should().BeEmpty(
             "a P/E of 8 was not knowable on 2024-04-15; the filing was published on 2024-05-02");
@@ -264,7 +264,7 @@ public class ScreeningPipelineTests : IAsyncLifetime
                 }],
             },
         };
-        await engine.RunAsync(criteria, snap, ct);
+        await engine.RunAsync(criteria, snap, null, ct);
 
         var run = await _db.ScreenRuns.AsNoTracking().SingleAsync(ct);
         run.SnapshotId.Should().Be(snap.Id);

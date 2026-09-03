@@ -29,4 +29,14 @@ public class SavedStrategy
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset? LastRunAt { get; set; }
+
+    /// <summary>
+    /// Read-only sharing (PLAN.md §10 Phase 4 "Strategy sharing"). Null means not shared. Set
+    /// once, on first "Share" click, and never auto-regenerated -- rotating it would silently
+    /// break every link already handed out, with no way to warn whoever holds one. Unguessable
+    /// (32 bytes of CSPRNG output): this token is the entire trust model for the public
+    /// /api/shared/{token} route, not a secondary check alongside some other auth.
+    /// </summary>
+    public string? ShareToken { get; set; }
+    public DateTimeOffset? SharedAt { get; set; }
 }

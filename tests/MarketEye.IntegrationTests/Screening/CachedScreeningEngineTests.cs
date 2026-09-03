@@ -107,8 +107,8 @@ public class CachedScreeningEngineTests : IAsyncLifetime
         var engine = await BuildEngineAsync();
         var criteria = Criteria();
 
-        var first = await engine.RunAsync(criteria, snapshot, ct);
-        var second = await engine.RunAsync(criteria, snapshot, ct);
+        var first = await engine.RunAsync(criteria, snapshot, null, ct);
+        var second = await engine.RunAsync(criteria, snapshot, null, ct);
 
         second.Rows.Select(r => r.Ticker).Should().BeEquivalentTo(first.Rows.Select(r => r.Ticker),
             "a cache hit must return the same data a fresh execution would");
@@ -141,8 +141,8 @@ public class CachedScreeningEngineTests : IAsyncLifetime
         var engine = await BuildEngineAsync();
         var criteria = Criteria();
 
-        await engine.RunAsync(criteria, first, ct);
-        await engine.RunAsync(criteria, second, ct);
+        await engine.RunAsync(criteria, first, null, ct);
+        await engine.RunAsync(criteria, second, null, ct);
 
         var secondSnapshotRuns = await _db.ScreenRuns
             .Where(r => r.SnapshotId == second.Id).ToListAsync(ct);

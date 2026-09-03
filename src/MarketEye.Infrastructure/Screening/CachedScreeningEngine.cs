@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Caching.Hybrid;
 using MarketEye.Application.Screening;
 using MarketEye.Domain.Entities;
@@ -34,7 +35,7 @@ public sealed class CachedScreeningEngine(
     };
 
     public async Task<ScreenResult> RunAsync(
-        ScreenCriteria criteria, DataSnapshot snapshot, CancellationToken ct)
+        ScreenCriteria criteria, DataSnapshot snapshot, int? savedStrategyId, CancellationToken ct)
     {
         var key = BuildKey(criteria, snapshot.Id);
         var missed = false;
@@ -46,7 +47,7 @@ public sealed class CachedScreeningEngine(
                 // Runs only on a miss. ScreeningEngine.RunAsync already writes its own ScreenRun
                 // row for this execution, so nothing more is needed here on that path.
                 missed = true;
-                return await inner.RunAsync(criteria, snapshot, ct2);
+                return await inner.RunAsync(criteria, snapshot, savedStrategyId, ct2);
             },
             options: CacheOptions,
             cancellationToken: ct);
@@ -55,7 +56,8 @@ public sealed class CachedScreeningEngine(
         {
             // A cache hit means inner.RunAsync did not run, so no ScreenRun row exists for this
             // request. Skipping the write here would make the run history quietly undercount how
-            // often a screen is actually used.
+            // often a screen is actually used -- and, when a saved strategy is behind this call,
+            // would make the alert-check job see no new run to diff at all.
             db.ScreenRuns.Add(new ScreenRun
             {
                 SnapshotId = snapshot.Id,
@@ -64,6 +66,10 @@ public sealed class CachedScreeningEngine(
                 ResultCount = result.Rows.Count,
                 DurationMs = 0,
                 FromCache = true,
+                SavedStrategyId = savedStrategyId,
+                MemberSecuritiesJson = savedStrategyId is null
+                    ? null
+                    : JsonSerializer.Serialize(result.Rows.Select(r => new { r.Id, r.Ticker, r.Name })),
             });
             await db.SaveChangesAsync(ct);
 

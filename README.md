@@ -65,7 +65,7 @@ numbers like them is no longer hypothetical.
 | 1 — Data pipeline + screener | Complete, with three qualified exit criteria (below) |
 | 2 — Intent translation | Complete, with three exit criteria measured and met (below) |
 | 3 — Backtesting | Complete — §10 exit criteria met and verified against a real multi-year backtest (below) |
-| 4 — Polish | Not started |
+| 4 — Polish | In progress — alerts, strategy sharing, and a second benchmark are built and tested (below); README/ADR work is what you're reading |
 
 `PLAN.md` §10 builds the foundation before the flashy part on purpose, because the foundation is
 what makes the rest credible — Phase 2 is where that argument gets tested for real.
@@ -171,6 +171,33 @@ point on the same trading path — `CagrNet <= CagrGross` now holds by construct
 after the fix: `CagrGross 5.57% >= CagrNet 5.11%` on the same 3-year backtest. Full account in
 `docs/adr/0009`.
 
+### What Phase 4 delivers
+
+- **Alerts, as an in-app feed, not email.** A nightly job (`AlertCheckJob`, invoked by the same
+  shared-secret-protected cron pattern §10 Phase 1's ingestion trigger already established) replays
+  every saved strategy against the newest sealed snapshot and diffs its matched securities against
+  the immediately preceding run. Every entry and exit becomes an `AlertEvent`, visible on `/alerts`.
+  A strategy's first-ever check writes no events by design — there is nothing yet to compare
+  against, so day one of a new strategy is silent rather than a flood of "everything just entered."
+  The diff itself (`AlertSetDiffer`, `MarketEye.Application`) is pure set arithmetic, unit-tested in
+  isolation from the database plumbing around it (`AlertDiffer`, `MarketEye.Infrastructure`).
+- **Strategy sharing, as read-only links, not accounts.** No login system was built — §14 leaves
+  full multi-user auth an open question, and building it was judged out of scope for a 2-3 week
+  polish phase. Instead, a saved strategy can be given an unguessable share token
+  (`POST /api/strategies/{name}/share`); anyone holding the resulting `/shared/{token}` link sees
+  the interpreted criteria and the strategy's last backtest, rendered read-only, with no path to
+  edit, delete, or re-run with different criteria reachable from that route at all.
+- **A second benchmark is now genuinely a config row, not a code change.** `NiftyTotalReturnLoader`
+  no longer hardcodes `NIFTY50TR` — it takes the ticker as a parameter, so loading NIFTY 500 TR (or
+  any other niftyindices.com total-return export) from the same manually-downloaded-CSV mechanism
+  `docs/adr/0010` already established is a second call with a different ticker, not new code.
+  `/backtest`'s benchmark field is a dropdown of whatever is actually loaded into `BenchmarkPrices`
+  once anything has been, falling back to the original free-text input otherwise.
+- **Three retroactive ADRs** close the gap `PLAN.md` §11 left open: pre-computed indicators
+  (`docs/adr/0011`), sealed data snapshots (`docs/adr/0012`), and the tree-shaped DSL with a flat
+  v1 compiler (`docs/adr/0013`) — all three document decisions already shipped in Phase 1, argued
+  properly for the first time rather than left implicit in code comments.
+
 ### What Phase 1 actually delivered
 
 - **Prices and universe** from the NSE bhavcopy archive — survivorship-free by construction, since
@@ -260,7 +287,7 @@ Then, separately, `dotnet run --project src/MarketEye.Web` and open `http://loca
 
 ```bash
 curl localhost:5199/health              # Healthy
-dotnet test tests/MarketEye.UnitTests   # 263 tests, no Docker required
+dotnet test tests/MarketEye.UnitTests   # 269 tests, no Docker required
 ```
 
 Ingestion and screening:
@@ -300,7 +327,11 @@ see its equity curve, assumptions, and gross/net metrics.
 ```bash
 dotnet test tests/MarketEye.BacktestTests             # 13 tests, no Docker required
 MARKETEYE_INTEGRATION=1 dotnet test tests/MarketEye.BacktestTests    # 20 tests (+4 synthetic-market, +3 known-bad), needs Docker
-MARKETEYE_INTEGRATION=1 dotnet test tests/MarketEye.IntegrationTests   # 25 tests, needs Docker running
+MARKETEYE_INTEGRATION=1 dotnet test tests/MarketEye.IntegrationTests   # 34 tests, needs Docker running
+# On a resource-constrained host (e.g. Apple Silicon, where SQL Server runs emulated), running every
+# class's own Testcontainers instance in parallel can exhaust the container's memory and produce
+# spurious SQL Server startup failures unrelated to the tests themselves. Run sequentially if so:
+#   dotnet exec tests/MarketEye.IntegrationTests/bin/Debug/net10.0/MarketEye.IntegrationTests.dll -parallelMode none
 ```
 
 `MarketEye.IntegrationTests`' container-backed tests are skipped unless `MARKETEYE_INTEGRATION=1`
@@ -378,11 +409,12 @@ section stays empty until there is a surface worth measuring on. See `docs/adr/0
 ```
 src/
   MarketEye.Domain/           entities, ScreenCriteria DSL, BacktestDefinition — zero dependencies
-  MarketEye.Application/      criteria compiler, indicator math, pure backtest math (Backtesting/)
+  MarketEye.Application/      criteria compiler, indicator math, pure backtest math (Backtesting/),
+                               pure alert-diff set arithmetic
   MarketEye.Infrastructure/   EF Core, Dapper, SqlBulkCopy, provider clients, screening engine,
                                backtest engine (Backtesting/) — anything that touches the database
   MarketEye.Ai/                LLM client, concept resolution, parse cache, rate limiter
-  MarketEye.Ingestion/        scheduled jobs, corporate actions, snapshot sealing
+  MarketEye.Ingestion/        scheduled jobs, corporate actions, snapshot sealing, alert checks
   MarketEye.Api/              ASP.NET Core Web API
   MarketEye.Web/              Blazor Server UI
 tests/

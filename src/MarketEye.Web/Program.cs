@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.HttpOverrides;
 using MarketEye.Web.Components;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -26,6 +27,16 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
+
+// App Service terminates TLS at its own front door and forwards to this app over plain HTTP,
+// tagging the original scheme in X-Forwarded-Proto. Without this, UseHttpsRedirection/UseHsts
+// below never see a request they consider secure and redirect every single one -- which Azure's
+// front door then forwards again as plain HTTP, looping forever (docs/azure-deployment-web-runbook.md §3c).
+app.UseForwardedHeaders(new ForwardedHeadersOptions
+{
+    ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto,
+});
+
 app.UseHttpsRedirection();
 
 app.UseAntiforgery();

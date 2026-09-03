@@ -1,6 +1,7 @@
 @page "/strategies"
 @using System.Net.Http.Json
 @inject HttpClient Http
+@inject NavigationManager Nav
 
 <PageTitle>Strategies — MarketEye</PageTitle>
 
@@ -32,6 +33,7 @@ else
                 <th>Description</th>
                 <th>Last run</th>
                 <th></th>
+                <th>Share</th>
                 <th></th>
             </tr>
         </thead>
@@ -52,6 +54,17 @@ else
                     <button class="link" @onclick="() => RunAsync(s)" disabled="@_busy">
                         @(_running == s.Name ? "Running…" : "Run")
                     </button>
+                </td>
+                <td>
+                    @if (s.ShareUrl is null)
+                    {
+                        <button class="link" @onclick="() => ShareAsync(s)" disabled="@_busy">Share</button>
+                    }
+                    else
+                    {
+                        <input readonly class="share-link" value="@AbsoluteUrl(s.ShareUrl)" onclick="this.select()" />
+                        <button class="link danger" @onclick="() => UnshareAsync(s)" disabled="@_busy">Unshare</button>
+                    }
                 </td>
                 <td>
                     <button class="link danger" @onclick="() => DeleteAsync(s)" disabled="@_busy">
@@ -161,6 +174,54 @@ else
         }
     }
 
+    private async Task ShareAsync(StrategyDto strategy)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var response = await Http.PostAsync($"/api/strategies/{Uri.EscapeDataString(strategy.Name)}/share", null);
+            if (response.IsSuccessStatusCode)
+            {
+                await LoadAsync();
+            }
+            else
+            {
+                _error = $"Could not share '{strategy.Name}'.";
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task UnshareAsync(StrategyDto strategy)
+    {
+        _busy = true;
+        _error = null;
+
+        try
+        {
+            var response = await Http.DeleteAsync($"/api/strategies/{Uri.EscapeDataString(strategy.Name)}/share");
+            if (response.IsSuccessStatusCode)
+            {
+                await LoadAsync();
+            }
+            else
+            {
+                _error = $"Could not unshare '{strategy.Name}'.";
+            }
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private string AbsoluteUrl(string relativeUrl) => new Uri(new Uri(Nav.BaseUri), relativeUrl).ToString();
+
     private async Task DeleteAsync(StrategyDto strategy)
     {
         _busy = true;
@@ -187,7 +248,8 @@ else
 
     private sealed record StrategyDto(
         string Name, string? Description, string? OriginalPrompt,
-        DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, DateTimeOffset? LastRunAt);
+        DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt, DateTimeOffset? LastRunAt,
+        string? ShareUrl);
 
     private sealed record ScreenResponse(
         List<ScreenRowDto> Rows, int SnapshotId, DateOnly AsOfDate, int DurationMs);

@@ -1,0 +1,137 @@
+@page "/shared/{Token}"
+@using System.Net.Http.Json
+@inject HttpClient Http
+@rendermode InteractiveServer
+
+<PageTitle>Shared strategy — MarketEye</PageTitle>
+
+@if (_notFound)
+{
+    <h1>Not found</h1>
+    <div class="notice">This link is invalid or has been revoked.</div>
+}
+else if (_strategy is null)
+{
+    <p><em>Loading…</em></p>
+}
+else
+{
+    <h1>@_strategy.Name</h1>
+    <p class="lede">
+        A read-only view of a saved strategy, shared by its owner. Definitions come from their
+        Strategy Vocabulary at the time it was saved — nothing here can be edited or re-run with
+        different criteria.
+    </p>
+
+    @if (_strategy.Description is { Length: > 0 })
+    {
+        <p>@_strategy.Description</p>
+    }
+
+    <h2>Interpreted strategy</h2>
+    <p class="definition">@_strategy.CriteriaExplanation</p>
+
+    @if (_strategy.LastBacktest is null)
+    {
+        <div class="notice">This strategy has no backtest yet.</div>
+    }
+    else
+    {
+        var bt = _strategy.LastBacktest;
+        <h2>Assumptions</h2>
+        <p class="assumptions">
+            Benchmark: @(bt.BenchmarkTicker ?? "none") <br />
+            Universe includes delisted securities. Costs are charged on traded notional, not
+            portfolio value.
+        </p>
+
+        <h2>Equity curve</h2>
+        @if (bt.EquityCurve.Count > 1)
+        {
+            <EquityCurveChart Portfolio="@ToTuples(bt.EquityCurve)"
+                               Benchmark="@(bt.BenchmarkCurve is null ? null : ToTuples(bt.BenchmarkCurve))" />
+        }
+        else
+        {
+            <p><em>Not enough data points to draw a curve.</em></p>
+        }
+
+        <h2>Metrics</h2>
+        <table class="results">
+            <tbody>
+                <tr><td>CAGR (gross)</td><td class="num">@Pct(bt.CagrGross)</td></tr>
+                <tr><td>CAGR (net)</td><td class="num">@Pct(bt.CagrNet)</td></tr>
+                <tr><td>Max drawdown</td><td class="num">@Pct(bt.MaxDrawdown)</td></tr>
+                <tr><td>Sharpe</td><td class="num">@bt.Sharpe.ToString("N2")</td></tr>
+                <tr><td>Sortino</td><td class="num">@bt.Sortino.ToString("N2")</td></tr>
+                <tr><td>Win rate</td><td class="num">@Pct(bt.WinRate)</td></tr>
+                <tr><td>Annual turnover</td><td class="num">@Pct(bt.AnnualTurnover)</td></tr>
+                <tr><td>Total costs paid</td><td class="num">@bt.TotalCostsPaid.ToString("N2")</td></tr>
+                <tr><td>Final equity</td><td class="num">@bt.FinalEquity.ToString("N2")</td></tr>
+                @if (bt.BenchmarkCagr is { } benchCagr)
+                {
+                    <tr><td>Benchmark CAGR (@bt.BenchmarkTicker)</td><td class="num">@Pct(benchCagr)</td></tr>
+                }
+            </tbody>
+        </table>
+
+        <p class="result-meta">Run at @bt.RunAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</p>
+    }
+}
+
+@code {
+    [Parameter]
+    public string Token { get; set; } = "";
+
+    private bool _notFound;
+    private SharedStrategyVm? _strategy;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var response = await Http.GetAsync($"/api/shared/{Uri.EscapeDataString(Token)}");
+        if (!response.IsSuccessStatusCode)
+        {
+            _notFound = true;
+            return;
+        }
+
+        _strategy = await response.Content.ReadFromJsonAsync<SharedStrategyVm>();
+    }
+
+    private static string Pct(decimal fraction) => (fraction * 100).ToString("N1") + "%";
+
+    private static List<(DateOnly Date, decimal Nav)> ToTuples(List<CurvePointVm> points) =>
+        points.Select(p => (p.Date, p.Nav)).ToList();
+
+    private sealed class SharedStrategyVm
+    {
+        public string Name { get; init; } = "";
+        public string? Description { get; init; }
+        public string CriteriaExplanation { get; init; } = "";
+        public SharedBacktestVm? LastBacktest { get; init; }
+    }
+
+    private sealed class SharedBacktestVm
+    {
+        public DateTimeOffset RunAt { get; init; }
+        public decimal CagrGross { get; init; }
+        public decimal CagrNet { get; init; }
+        public decimal MaxDrawdown { get; init; }
+        public decimal Sharpe { get; init; }
+        public decimal Sortino { get; init; }
+        public decimal WinRate { get; init; }
+        public decimal AnnualTurnover { get; init; }
+        public decimal TotalCostsPaid { get; init; }
+        public decimal FinalEquity { get; init; }
+        public string? BenchmarkTicker { get; init; }
+        public decimal? BenchmarkCagr { get; init; }
+        public List<CurvePointVm> EquityCurve { get; init; } = [];
+        public List<CurvePointVm>? BenchmarkCurve { get; init; }
+    }
+
+    private sealed class CurvePointVm
+    {
+        public DateOnly Date { get; init; }
+        public decimal Nav { get; init; }
+    }
+}

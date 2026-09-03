@@ -157,6 +157,48 @@ public class SavedStrategyStoreTests : IAsyncLifetime
     }
 
     [Fact(Skip = DockerGate.SkipReason, SkipUnless = nameof(DockerGate.Enabled), SkipType = typeof(DockerGate))]
+    public async Task Sharing_issues_a_token_and_re_sharing_is_idempotent()
+    {
+        // PLAN.md §10 Phase 4 "Strategy sharing": read-only links, not full auth.
+        var ct = TestContext.Current.CancellationToken;
+        await _store.CreateAsync(Draft(), ct);
+
+        var first = await _store.EnableSharingAsync("my_value_screen", ct);
+        var second = await _store.EnableSharingAsync("my_value_screen", ct);
+
+        first.Should().NotBeNullOrWhiteSpace();
+        second.Should().Be(first, "re-sharing must not rotate the token and break a link already handed out");
+
+        var stored = await _db.SavedStrategies.AsNoTracking().SingleAsync(s => s.Name == "my_value_screen", ct);
+        stored.ShareToken.Should().Be(first);
+        stored.SharedAt.Should().NotBeNull();
+    }
+
+    [Fact(Skip = DockerGate.SkipReason, SkipUnless = nameof(DockerGate.Enabled), SkipType = typeof(DockerGate))]
+    public async Task Unsharing_clears_the_token_so_the_old_link_stops_resolving()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await _store.CreateAsync(Draft(), ct);
+        var token = await _store.EnableSharingAsync("my_value_screen", ct);
+
+        (await _store.DisableSharingAsync("my_value_screen", ct)).Should().BeTrue();
+
+        var stored = await _db.SavedStrategies.AsNoTracking().SingleAsync(s => s.Name == "my_value_screen", ct);
+        stored.ShareToken.Should().BeNull();
+        stored.SharedAt.Should().BeNull();
+        (await _db.SavedStrategies.AnyAsync(s => s.ShareToken == token, ct)).Should().BeFalse(
+            "the old token must not resolve to anything once sharing is disabled");
+    }
+
+    [Fact(Skip = DockerGate.SkipReason, SkipUnless = nameof(DockerGate.Enabled), SkipType = typeof(DockerGate))]
+    public async Task Sharing_an_unknown_strategy_returns_null_rather_than_throwing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        (await _store.EnableSharingAsync("does_not_exist", ct)).Should().BeNull();
+        (await _store.DisableSharingAsync("does_not_exist", ct)).Should().BeFalse();
+    }
+
+    [Fact(Skip = DockerGate.SkipReason, SkipUnless = nameof(DockerGate.Enabled), SkipType = typeof(DockerGate))]
     public async Task Deleting_removes_it_and_reports_a_missing_name_honestly()
     {
         var ct = TestContext.Current.CancellationToken;

@@ -193,7 +193,7 @@ public class SyntheticMarketEngineTests : IAsyncLifetime
         await SeedMarketAsync(ct);
         var engine = BuildEngine();
 
-        var run = await engine.RunAsync(BuildDefinition(), ct);
+        var run = await engine.RunAsync(BuildDefinition(), null, ct);
 
         run.Rebalances.Should().HaveCount(1);
         run.Rebalances[0].SignalDate.Should().Be(D0);
@@ -215,7 +215,7 @@ public class SyntheticMarketEngineTests : IAsyncLifetime
         await SeedMarketAsync(ct);
         var engine = BuildEngine();
 
-        var run = await engine.RunAsync(BuildDefinition(), ct);
+        var run = await engine.RunAsync(BuildDefinition(), null, ct);
 
         run.FinalEquity.Should().Be(276_000m);
     }
@@ -231,7 +231,7 @@ public class SyntheticMarketEngineTests : IAsyncLifetime
         await SeedMarketAsync(ct);
         var engine = BuildEngine();
 
-        var run = await engine.RunAsync(BuildDefinition(), ct);
+        var run = await engine.RunAsync(BuildDefinition(), null, ct);
 
         run.CagrGross.Should().Be(run.CagrNet);
         run.TotalCostsPaid.Should().Be(0m);
@@ -248,7 +248,7 @@ public class SyntheticMarketEngineTests : IAsyncLifetime
         await SeedMarketAsync(ct);
         var engine = BuildEngine();
 
-        var run = await engine.RunAsync(BuildDefinition(), ct);
+        var run = await engine.RunAsync(BuildDefinition(), null, ct);
 
         // BacktestEngine serialises the curve with JsonSerializerDefaults.Web (camelCase); the
         // default Deserialize options are case-sensitive, so this must match or every property

@@ -46,3 +46,35 @@ jobs:
 
           echo "::error::Ingestion trigger failed after 3 attempts."
           exit 1
+
+  # PLAN.md §10 Phase 4 "Alerts": checks every saved strategy against the snapshot the job above
+  # just sealed and records entries/exits. Must run after ingestion, not in parallel with it --
+  # "latest sealed snapshot" needs to mean today's, not yesterday's.
+  check-alerts:
+    needs: trigger
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check alerts
+        env:
+          BASE_URL: ${{ secrets.MARKETEYE_BASE_URL }}
+          INGEST_SECRET: ${{ secrets.MARKETEYE_INGEST_SECRET }}
+        run: |
+          for attempt in 1 2 3; do
+            code=$(curl -sS -o /tmp/out.json -w '%{http_code}' -X POST \
+              -H "X-Ingest-Secret: $INGEST_SECRET" \
+              --max-time 300 \
+              "$BASE_URL/api/alerts/check" || echo "000")
+
+            if [ "$code" = "200" ]; then
+              echo "Alert check ok"; cat /tmp/out.json; exit 0
+            fi
+
+            echo "Attempt $attempt failed with HTTP $code"
+            echo "--- response body ---"
+            cat /tmp/out.json 2>/dev/null || echo "(empty)"
+            echo
+            sleep 30
+          done
+
+          echo "::error::Alert check failed after 3 attempts."
+          exit 1

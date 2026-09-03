@@ -65,7 +65,23 @@ else
         <label>Initial capital <input type="number" min="1" step="any" @bind="_initialCapital" /></label>
         <label>Transaction cost (bps) <input type="number" min="0" @bind="_transactionCostBps" /></label>
         <label>Slippage (bps) <input type="number" min="0" @bind="_slippageBps" /></label>
-        <label>Benchmark ticker <input type="text" @bind="_benchmarkTicker" placeholder="NIFTY50TR (blank to skip)" /></label>
+        @if (_availableBenchmarks is { Count: > 0 })
+        {
+            <label>
+                Benchmark
+                <select @bind="_benchmarkTicker">
+                    <option value="">— none (skip comparison) —</option>
+                    @foreach (var b in _availableBenchmarks)
+                    {
+                        <option value="@b">@b</option>
+                    }
+                </select>
+            </label>
+        }
+        else
+        {
+            <label>Benchmark ticker <input type="text" @bind="_benchmarkTicker" placeholder="NIFTY50TR (blank to skip)" /></label>
+        }
 
         <div class="actions">
             <button class="primary" @onclick="RunAsync" disabled="@(_running || string.IsNullOrWhiteSpace(_selectedStrategyName))">
@@ -142,6 +158,7 @@ else
     private int _transactionCostBps = 23;
     private int _slippageBps = 5;
     private string? _benchmarkTicker = "NIFTY50TR";
+    private List<string>? _availableBenchmarks;
 
     private bool _running;
     private string? _networkError;
@@ -158,6 +175,25 @@ else
         {
             _networkError = $"Could not load saved strategies: {ex.Message}";
             _strategies = [];
+        }
+
+        try
+        {
+            _availableBenchmarks = await Http.GetFromJsonAsync<List<string>>("/api/backtest/benchmarks") ?? [];
+            // Nothing loaded yet (docs/adr/0010): fall back to the free-text field rather than
+            // rendering a dropdown with only a "none" option, and keep the field's existing
+            // default rather than silently blanking it.
+            if (_availableBenchmarks.Count > 0 &&
+                (_benchmarkTicker is null || !_availableBenchmarks.Contains(_benchmarkTicker)))
+            {
+                _benchmarkTicker = _availableBenchmarks[0];
+            }
+        }
+        catch
+        {
+            // Falls back to the free-text input below -- an unreachable /api/backtest/benchmarks
+            // call must not block the page from working the way it always has.
+            _availableBenchmarks = [];
         }
     }
 
@@ -200,7 +236,8 @@ else
                 ["benchmarkTicker"] = string.IsNullOrWhiteSpace(_benchmarkTicker) ? null : _benchmarkTicker,
             };
 
-            var response = await Http.PostAsJsonAsync("/api/backtest", new { definition });
+            var response = await Http.PostAsJsonAsync(
+                "/api/backtest", new { definition, savedStrategyName = _selectedStrategyName });
 
             if (response.IsSuccessStatusCode)
             {

@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using MarketEye.Application.Screening;
 using MarketEye.Domain.Entities;
@@ -78,6 +79,48 @@ public sealed class SavedStrategyStore(
         await db.SaveChangesAsync(ct);
         return new(entity, validation);
     }
+
+    /// <summary>
+    /// Turns on read-only sharing (PLAN.md §10 Phase 4 "Strategy sharing"), returning the token.
+    /// Idempotent: an already-shared strategy keeps its existing token rather than rotating it,
+    /// since rotating would silently break every link already handed out.
+    /// </summary>
+    public async Task<string?> EnableSharingAsync(string name, CancellationToken ct)
+    {
+        var entity = await db.SavedStrategies.FirstOrDefaultAsync(
+            s => s.Name == name && s.OwnerUserId == null, ct);
+        if (entity is null) return null;
+
+        if (entity.ShareToken is null)
+        {
+            entity.ShareToken = GenerateToken();
+            entity.SharedAt = DateTimeOffset.UtcNow;
+            await db.SaveChangesAsync(ct);
+        }
+
+        return entity.ShareToken;
+    }
+
+    /// <summary>Revokes sharing. Any link already handed out stops resolving immediately.</summary>
+    public async Task<bool> DisableSharingAsync(string name, CancellationToken ct)
+    {
+        var entity = await db.SavedStrategies.FirstOrDefaultAsync(
+            s => s.Name == name && s.OwnerUserId == null, ct);
+        if (entity is null) return false;
+
+        entity.ShareToken = null;
+        entity.SharedAt = null;
+        await db.SaveChangesAsync(ct);
+        return true;
+    }
+
+    /// <summary>
+    /// 32 bytes of CSPRNG output, base64url-encoded with padding trimmed -- unguessable, and the
+    /// entire trust model for the public /api/shared/{token} route (no other check gates it).
+    /// </summary>
+    private static string GenerateToken() =>
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+            .Replace('+', '-').Replace('/', '_').TrimEnd('=');
 
     public async Task<bool> DeleteAsync(string name, CancellationToken ct)
     {

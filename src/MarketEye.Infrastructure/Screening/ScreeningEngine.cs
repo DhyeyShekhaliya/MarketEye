@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Dapper;
 using Microsoft.Data.SqlClient;
 using MarketEye.Application.Screening;
@@ -21,7 +22,7 @@ public sealed class ScreeningEngine(
     string connectionString)
 {
     public async Task<ScreenResult> RunAsync(
-        ScreenCriteria criteria, DataSnapshot snapshot, CancellationToken ct)
+        ScreenCriteria criteria, DataSnapshot snapshot, int? savedStrategyId, CancellationToken ct)
     {
         // §8.2 guards run before anything touches the database.
         PointInTimeGuard.RequireSealed(snapshot);
@@ -54,6 +55,13 @@ public sealed class ScreeningEngine(
             RunAt = DateTimeOffset.UtcNow,
             ResultCount = rows.Count,
             DurationMs = (int)sw.ElapsedMilliseconds,
+            SavedStrategyId = savedStrategyId,
+            // Populated only when a saved strategy is behind this run (Phase 4 "Alerts" diffs
+            // consecutive runs' member sets) -- an ad hoc /api/screen call has nothing to diff
+            // against, so it does not pay this storage cost.
+            MemberSecuritiesJson = savedStrategyId is null
+                ? null
+                : JsonSerializer.Serialize(rows.Select(r => new { r.Id, r.Ticker, r.Name })),
         });
         await db.SaveChangesAsync(ct);
 

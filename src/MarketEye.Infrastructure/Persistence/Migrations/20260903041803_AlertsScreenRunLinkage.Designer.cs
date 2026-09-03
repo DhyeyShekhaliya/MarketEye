@@ -4,6 +4,7 @@ using MarketEye.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace MarketEye.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(MarketEyeDbContext))]
-    partial class MarketEyeDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260903041803_AlertsScreenRunLinkage")]
+    partial class AlertsScreenRunLinkage
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -201,9 +204,6 @@ namespace MarketEye.Infrastructure.Persistence.Migrations
                     b.Property<DateTimeOffset>("RunAt")
                         .HasColumnType("datetimeoffset");
 
-                    b.Property<int?>("SavedStrategyId")
-                        .HasColumnType("int");
-
                     b.Property<decimal>("Sharpe")
                         .HasPrecision(18, 6)
                         .HasColumnType("decimal(18,6)");
@@ -226,8 +226,6 @@ namespace MarketEye.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("RunAt");
-
-                    b.HasIndex("SavedStrategyId", "RunAt");
 
                     b.ToTable("BacktestRuns", (string)null);
                 });
@@ -666,21 +664,10 @@ namespace MarketEye.Infrastructure.Persistence.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
-                    b.Property<string>("ShareToken")
-                        .HasMaxLength(43)
-                        .HasColumnType("nvarchar(43)");
-
-                    b.Property<DateTimeOffset?>("SharedAt")
-                        .HasColumnType("datetimeoffset");
-
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("datetimeoffset");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("ShareToken")
-                        .IsUnique()
-                        .HasFilter("[ShareToken] IS NOT NULL");
 
                     b.HasIndex("Name", "OwnerUserId")
                         .IsUnique();
@@ -871,16 +858,6 @@ namespace MarketEye.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("BacktestRun");
-                });
-
-            modelBuilder.Entity("MarketEye.Domain.Entities.BacktestRun", b =>
-                {
-                    b.HasOne("MarketEye.Domain.Entities.SavedStrategy", "SavedStrategy")
-                        .WithMany()
-                        .HasForeignKey("SavedStrategyId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
-                    b.Navigation("SavedStrategy");
                 });
 
             modelBuilder.Entity("MarketEye.Domain.Entities.CorporateAction", b =>

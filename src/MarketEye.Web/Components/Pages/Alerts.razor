@@ -1,0 +1,126 @@
+@page "/alerts"
+@using System.Net.Http.Json
+@inject HttpClient Http
+@rendermode InteractiveServer
+
+<PageTitle>Alerts — MarketEye</PageTitle>
+
+<h1>Alerts</h1>
+
+<p class="lede">
+    A nightly check replays each saved strategy against the newest sealed snapshot and records
+    every security that entered or exited its matched set since the previous check.
+</p>
+
+<ValidationErrors Message="@_error" />
+
+@if (_strategies is null)
+{
+    <p><em>Loading saved strategies…</em></p>
+}
+else if (_strategies.Count == 0)
+{
+    <div class="notice">
+        No saved strategies yet. Build and save one on the <a href="screen">Screen</a> page first —
+        alerts only track strategies that have been saved.
+    </div>
+}
+else
+{
+    <div class="form">
+        <label>
+            Strategy
+            <select @bind="_selectedStrategyName" @bind:after="LoadAlertsAsync">
+                <option value="">— choose —</option>
+                @foreach (var s in _strategies)
+                {
+                    <option value="@s.Name">@s.Name</option>
+                }
+            </select>
+        </label>
+    </div>
+
+    @if (string.IsNullOrWhiteSpace(_selectedStrategyName))
+    {
+        <p><em>Choose a strategy to see its alert history.</em></p>
+    }
+    else if (_events is null)
+    {
+        <p><em>Loading alerts…</em></p>
+    }
+    else if (_events.Count == 0)
+    {
+        <div class="notice">
+            No alerts yet for "@_selectedStrategyName". Alerts populate once the nightly check has
+            run at least twice for this strategy — the first check has nothing to compare against,
+            so it never raises anything by itself.
+        </div>
+    }
+    else
+    {
+        <table class="results">
+            <thead>
+                <tr>
+                    <th>Ticker</th><th>Event</th><th>Detected at</th><th>As of</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var e in _events)
+                {
+                    <tr>
+                        <td>@e.Ticker</td>
+                        <td>@e.EventType</td>
+                        <td>@e.DetectedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                        <td>@e.AsOfDate.ToString("yyyy-MM-dd")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private List<StrategySummary>? _strategies;
+    private string _selectedStrategyName = "";
+    private List<AlertEventDto>? _events;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _strategies = await Http.GetFromJsonAsync<List<StrategySummary>>("/api/strategies") ?? [];
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not load saved strategies: {ex.Message}";
+            _strategies = [];
+        }
+    }
+
+    private async Task LoadAlertsAsync()
+    {
+        _events = null;
+        _error = null;
+
+        if (string.IsNullOrWhiteSpace(_selectedStrategyName)) return;
+
+        try
+        {
+            var response = await Http.GetFromJsonAsync<AlertsResponse>(
+                $"/api/strategies/{Uri.EscapeDataString(_selectedStrategyName)}/alerts");
+            _events = response?.Events ?? [];
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not load alerts: {ex.Message}";
+            _events = [];
+        }
+    }
+
+    private sealed record StrategySummary(string Name, string? Description);
+
+    private sealed record AlertsResponse(List<AlertEventDto> Events, string Disclaimer);
+
+    private sealed record AlertEventDto(string Ticker, string EventType, DateTimeOffset DetectedAt, DateOnly AsOfDate);
+}

@@ -27,6 +27,7 @@ public class MarketEyeDbContext(DbContextOptions<MarketEyeDbContext> options) : 
     public DbSet<BacktestRun> BacktestRuns => Set<BacktestRun>();
     public DbSet<BacktestRebalance> BacktestRebalances => Set<BacktestRebalance>();
     public DbSet<BenchmarkPrice> BenchmarkPrices => Set<BenchmarkPrice>();
+    public DbSet<AlertEvent> AlertEvents => Set<AlertEvent>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -237,6 +238,15 @@ public class MarketEyeDbContext(DbContextOptions<MarketEyeDbContext> options) : 
             e.HasOne(x => x.Snapshot).WithMany().HasForeignKey(x => x.SnapshotId)
                 .OnDelete(DeleteBehavior.Restrict);
             e.HasIndex(x => x.RunAt);
+
+            // SetNull, not Cascade: a run is evidence of what happened and outlives the strategy
+            // that produced it (Phase 4 "Alerts").
+            e.HasOne(x => x.SavedStrategy).WithMany().HasForeignKey(x => x.SavedStrategyId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // The alert-check job's one query shape: "the most recent run with a member list for
+            // this strategy."
+            e.HasIndex(x => new { x.SavedStrategyId, x.RunAt });
         });
 
         b.Entity<SavedStrategy>(e =>
@@ -253,6 +263,12 @@ public class MarketEyeDbContext(DbContextOptions<MarketEyeDbContext> options) : 
             // HasFilter(null) restores SQL Server's own NULL-equality semantics, so with every
             // owner null today exactly one strategy may claim a given name.
             e.HasIndex(x => new { x.Name, x.OwnerUserId }).IsUnique().HasFilter(null);
+
+            // 43 chars: a base64url-encoded 32-byte token with padding trimmed. Filtered so
+            // multiple never-shared (null) rows don't collide against SQL Server's own
+            // NULL-equality semantics -- only an actual issued token must be unique.
+            e.Property(x => x.ShareToken).HasMaxLength(43);
+            e.HasIndex(x => x.ShareToken).IsUnique().HasFilter("[ShareToken] IS NOT NULL");
         });
 
         b.Entity<BacktestRun>(e =>
@@ -285,6 +301,15 @@ public class MarketEyeDbContext(DbContextOptions<MarketEyeDbContext> options) : 
             e.HasIndex(x => x.RunAt);
             e.HasMany(x => x.Rebalances).WithOne(x => x.BacktestRun!)
                 .HasForeignKey(x => x.BacktestRunId).OnDelete(DeleteBehavior.Cascade);
+
+            // SetNull, not Cascade: a completed backtest is a historical record that outlives the
+            // strategy that produced it, same reasoning as ScreenRun.SavedStrategyId.
+            e.HasOne(x => x.SavedStrategy).WithMany().HasForeignKey(x => x.SavedStrategyId)
+                .OnDelete(DeleteBehavior.SetNull);
+
+            // The shared-strategy public page's one query shape: "the most recent backtest for
+            // this strategy."
+            e.HasIndex(x => new { x.SavedStrategyId, x.RunAt });
         });
 
         b.Entity<BacktestRebalance>(e =>
@@ -305,6 +330,27 @@ public class MarketEyeDbContext(DbContextOptions<MarketEyeDbContext> options) : 
             e.HasKey(x => new { x.Ticker, x.Date });
             e.Property(x => x.Ticker).HasMaxLength(32).IsRequired();
             e.Property(x => x.TotalReturnIndexValue).HasPrecision(18, 4);
+        });
+
+        b.Entity<AlertEvent>(e =>
+        {
+            e.ToTable("AlertEvents");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.Ticker).HasMaxLength(20).IsRequired();
+            e.Property(x => x.EventType).HasConversion<string>().HasMaxLength(16);
+
+            // Cascade, unlike ScreenRun.SavedStrategyId's SetNull above: an orphaned alert is
+            // meaningless, not history worth keeping.
+            e.HasOne(x => x.SavedStrategy).WithMany().HasForeignKey(x => x.SavedStrategyId)
+                .OnDelete(DeleteBehavior.Cascade);
+
+            // The run that produced this event is evidence, same reasoning as ScreenRun's own FK
+            // to DataSnapshot -- never cascade-deleted just because an alert references it.
+            e.HasOne<ScreenRun>().WithMany().HasForeignKey(x => x.ScreenRunId)
+                .OnDelete(DeleteBehavior.Restrict);
+
+            // The feed's one query shape: "events for strategy X, newest first."
+            e.HasIndex(x => new { x.SavedStrategyId, x.DetectedAt });
         });
     }
 }

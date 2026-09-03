@@ -33,7 +33,8 @@ public sealed class BacktestEngine(
 {
     private static readonly JsonSerializerOptions BlobJsonOptions = new(JsonSerializerDefaults.Web);
 
-    public async Task<BacktestRun> RunAsync(BacktestDefinition definition, CancellationToken ct)
+    public async Task<BacktestRun> RunAsync(
+        BacktestDefinition definition, int? savedStrategyId, CancellationToken ct)
     {
         if (definition.StartDate > definition.EndDate)
         {
@@ -77,6 +78,7 @@ public sealed class BacktestEngine(
 
         var run = new BacktestRun
         {
+            SavedStrategyId = savedStrategyId,
             DefinitionJson = BacktestDefinitionJson.Serialize(definition),
             RunAt = DateTimeOffset.UtcNow,
             StartDate = definition.StartDate,
@@ -199,7 +201,10 @@ public sealed class BacktestEngine(
             var criteria = definition.MaxPositions is { } max
                 ? definition.Criteria with { Limit = max }
                 : definition.Criteria;
-            var screenResult = await screeningEngine.RunAsync(criteria, snapshot, ct);
+            // Not tied to a saved strategy for alert-diffing purposes -- a backtest replays many
+            // distinct historical dates, none of which is "the latest run to compare against
+            // tomorrow's," so this always passes null (§10 Phase 4 "Alerts" only diffs live runs).
+            var screenResult = await screeningEngine.RunAsync(criteria, snapshot, null, ct);
             var targetIds = screenResult.Rows.Select(r => r.Id).ToList();
             var tickerById = screenResult.Rows.ToDictionary(r => r.Id, r => r.Ticker);
 

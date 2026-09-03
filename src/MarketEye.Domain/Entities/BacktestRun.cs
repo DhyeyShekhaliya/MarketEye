@@ -13,6 +13,15 @@ public class BacktestRun
 {
     public long Id { get; set; }
 
+    /// <summary>
+    /// Set when this run was launched against a saved strategy (from /backtest's strategy picker).
+    /// Null on delete, mirroring ScreenRun.SavedStrategyId: a completed backtest is a historical
+    /// record that outlives the strategy that produced it. Lets a shared strategy's public page
+    /// (Phase 4 "Strategy sharing") show its most recent backtest without a second lookup table.
+    /// </summary>
+    public int? SavedStrategyId { get; set; }
+    public SavedStrategy? SavedStrategy { get; set; }
+
     /// <summary>Serialised BacktestDefinition. The UI's assumptions panel renders this, never a
     /// hand-typed copy, so it cannot drift from what actually ran.</summary>
     public required string DefinitionJson { get; set; }

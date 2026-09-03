@@ -38,6 +38,7 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["ApplicationInsights:Connec
 builder.Services.AddMarketEyeInfrastructure(builder.Configuration);
 builder.Services.AddMarketEyeAi(builder.Configuration);
 builder.Services.AddScoped<DailyIngestionJob>();
+builder.Services.AddScoped<AlertCheckJob>();
 // Enums cross the wire as names, matching ScreenCriteriaJson (Application/Screening).
 //
 // Without this, POST /api/screen rejects every request the Blazor UI sends: ScreenCriteria is full
@@ -350,7 +351,7 @@ app.MapPost("/api/screen", async (
 
     try
     {
-        var result = await engine.RunAsync(request.Criteria, snapshot, ct);
+        var result = await engine.RunAsync(request.Criteria, snapshot, null, ct);
         return Results.Ok(new
         {
             result.Rows,
@@ -380,11 +381,24 @@ app.MapPost("/api/screen", async (
 app.MapPost("/api/backtest", async (
     BacktestRequest request,
     BacktestEngine engine,
+    MarketEyeDbContext db,
     CancellationToken ct) =>
 {
     try
     {
-        var run = await engine.RunAsync(request.Definition, ct);
+        // Resolves a name to an id server-side rather than trusting a posted id, so a shared
+        // strategy's "last backtest" (Phase 4 "Strategy sharing") only ever links to a run that
+        // actually named a real, currently-existing strategy.
+        int? savedStrategyId = null;
+        if (!string.IsNullOrWhiteSpace(request.SavedStrategyName))
+        {
+            savedStrategyId = await db.SavedStrategies.AsNoTracking()
+                .Where(s => s.Name == request.SavedStrategyName)
+                .Select(s => (int?)s.Id)
+                .FirstOrDefaultAsync(ct);
+        }
+
+        var run = await engine.RunAsync(request.Definition, savedStrategyId, ct);
         return Results.Ok(new
         {
             run.Id,
@@ -421,6 +435,13 @@ app.MapPost("/api/backtest", async (
         });
     }
 });
+
+// What's actually loaded into BenchmarkPrices (§10 Phase 4 "Additional benchmarks") -- lets the
+// UI offer a dropdown of real options instead of a blind free-text ticker field, without a second
+// hardcoded list to keep in sync with whatever has actually been loaded via NiftyTotalReturnLoader.
+app.MapGet("/api/backtest/benchmarks", async (MarketEyeDbContext db, CancellationToken ct) =>
+    Results.Ok(await db.BenchmarkPrices.AsNoTracking()
+        .Select(b => b.Ticker).Distinct().OrderBy(t => t).ToListAsync(ct)));
 
 // --- Saved strategies (§10: "core workflow, not polish") -------------------------------------
 //
@@ -498,7 +519,7 @@ app.MapPost("/api/strategies/{name}/run", async (
     try
     {
         var criteria = ScreenCriteriaJson.Deserialize(strategy.CriteriaJson);
-        var result = await engine.RunAsync(criteria, snapshot, ct);
+        var result = await engine.RunAsync(criteria, snapshot, strategy.Id, ct);
 
         strategy.LastRunAt = DateTimeOffset.UtcNow;
         await db.SaveChangesAsync(ct);
@@ -522,6 +543,119 @@ app.MapPost("/api/strategies/{name}/run", async (
             ["criteria"] = [ex.Message],
         });
     }
+});
+
+// Nightly alert check (§10 Phase 4 "Alerts"), run by cron after ingestion seals today's snapshot
+// (.github/workflows/nightly-ingest.yml). Same shared-secret pattern as the ingest endpoints below
+// -- this reads every saved strategy and writes AlertEvents, so it must not be open either.
+app.MapPost("/api/alerts/check", async (
+    HttpContext http, IConfiguration config, AlertCheckJob job, DateOnly? asOfDate, CancellationToken ct) =>
+{
+    var expected = config["Ingestion:TriggerSecret"];
+    if (string.IsNullOrWhiteSpace(expected)) return Results.Problem(
+        detail: "Ingestion:TriggerSecret is not configured.", statusCode: StatusCodes.Status503ServiceUnavailable);
+
+    var provided = http.Request.Headers["X-Ingest-Secret"].ToString();
+    if (!CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(provided), Encoding.UTF8.GetBytes(expected)))
+    {
+        return Results.Unauthorized();
+    }
+
+    // Defaults to the most recent weekday, same "IST session that just ended" convention
+    // /api/ingest/run uses -- the cron fires after that session's data is sealed.
+    var target = asOfDate ?? DateOnly.FromDateTime(DateTime.UtcNow.AddHours(5.5));
+    var result = await job.RunAsync(target, ct);
+    return result.Succeeded
+        ? Results.Ok(result)
+        : Results.Problem(detail: result.Error, statusCode: StatusCodes.Status503ServiceUnavailable);
+});
+
+// --- Strategy sharing (§10 Phase 4: read-only links, not full auth) -------------------------
+//
+// Owner-side: same trust level as the rest of /api/strategies (no auth today, matches the app).
+app.MapPost("/api/strategies/{name}/share", async (
+    string name, SavedStrategyStore store, CancellationToken ct) =>
+{
+    var token = await store.EnableSharingAsync(name, ct);
+    return token is null
+        ? Results.NotFound(new { name })
+        : Results.Ok(new { shareToken = token, shareUrl = $"/shared/{token}" });
+});
+
+app.MapDelete("/api/strategies/{name}/share", async (
+    string name, SavedStrategyStore store, CancellationToken ct) =>
+    await store.DisableSharingAsync(name, ct) ? Results.NoContent() : Results.NotFound(new { name }));
+
+// Public, unauthenticated, read-only -- deliberately its own route prefix, never nested under
+// /api/strategies/{name}, so a token holder cannot structurally reach an owner-only verb. GET
+// only: there is no PUT/DELETE registered on this prefix, so "read-only" is enforced by there
+// being nothing else to call, not by a runtime check. The token is the entire trust model -- 32
+// bytes of CSPRNG output, not enumerable.
+app.MapGet("/api/shared/{token}", async (
+    string token, MarketEyeDbContext db, CriteriaExplainer explainer, CancellationToken ct) =>
+{
+    var strategy = await db.SavedStrategies.AsNoTracking()
+        .FirstOrDefaultAsync(s => s.ShareToken == token, ct);
+    if (strategy is null) return Results.NotFound();
+
+    var lastBacktest = await db.BacktestRuns.AsNoTracking()
+        .Where(b => b.SavedStrategyId == strategy.Id)
+        .OrderByDescending(b => b.RunAt)
+        .FirstOrDefaultAsync(ct);
+
+    var criteria = ScreenCriteriaJson.Deserialize(strategy.CriteriaJson);
+
+    return Results.Ok(new
+    {
+        strategy.Name,
+        strategy.Description,
+        Criteria = criteria,
+        // Pre-rendered server-side, same as /api/vocabulary/strategy-concepts's Explanation field
+        // -- a visitor with only this token has no other way to resolve field names to meaning.
+        CriteriaExplanation = explainer.Explain(criteria.Root),
+        LastBacktest = lastBacktest is null ? null : new
+        {
+            lastBacktest.RunAt,
+            lastBacktest.CagrGross,
+            lastBacktest.CagrNet,
+            lastBacktest.MaxDrawdown,
+            lastBacktest.Sharpe,
+            lastBacktest.Sortino,
+            lastBacktest.WinRate,
+            lastBacktest.AnnualTurnover,
+            lastBacktest.TotalCostsPaid,
+            lastBacktest.FinalEquity,
+            lastBacktest.BenchmarkTicker,
+            lastBacktest.BenchmarkCagr,
+            EquityCurve = JsonSerializer.Deserialize<JsonElement>(lastBacktest.EquityCurveJson),
+            BenchmarkCurve = lastBacktest.BenchmarkCurveJson is null
+                ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(lastBacktest.BenchmarkCurveJson),
+        },
+        disclaimer = "Educational purposes only. Not investment advice.",
+    });
+});
+
+// Read-only, so it is not behind the ingestion secret -- it exposes no more than the screening
+// endpoints already do. Newest first: a feed shows what changed most recently.
+app.MapGet("/api/strategies/{name}/alerts", async (
+    string name, int? take, MarketEyeDbContext db, CancellationToken ct) =>
+{
+    var strategy = await db.SavedStrategies.AsNoTracking().FirstOrDefaultAsync(s => s.Name == name, ct);
+    if (strategy is null) return Results.NotFound(new { name });
+
+    var events = await db.AlertEvents.AsNoTracking()
+        .Where(a => a.SavedStrategyId == strategy.Id)
+        .OrderByDescending(a => a.DetectedAt)
+        .Take(take ?? 100)
+        .Select(a => new { a.Ticker, a.EventType, a.DetectedAt, a.AsOfDate })
+        .ToListAsync(ct);
+
+    return Results.Ok(new
+    {
+        events,
+        disclaimer = "Educational purposes only. Not investment advice.",
+    });
 });
 
 // Ingestion trigger. App Service F1 has no Always On, so an in-process timer never fires; an
@@ -767,6 +901,7 @@ static object ToDto(SavedStrategy s) => new
     s.CreatedAt,
     s.UpdatedAt,
     s.LastRunAt,
+    ShareUrl = s.ShareToken is null ? null : $"/shared/{s.ShareToken}",
 };
 
 /// <summary>409, not 400: the request itself is well-formed, another row already owns the name.</summary>
@@ -782,8 +917,11 @@ public sealed record ScreenRequest(ScreenCriteria Criteria, DateOnly? AsOfDate);
 /// <summary>Request body for POST /api/parse.</summary>
 public sealed record ParseRequest(string Prompt);
 
-/// <summary>Request body for POST /api/backtest.</summary>
-public sealed record BacktestRequest(BacktestDefinition Definition);
+/// <summary>
+/// Request body for POST /api/backtest. SavedStrategyName is optional -- an ad hoc backtest (no
+/// strategy selected) omits it -- and is resolved to an id server-side, never trusted as posted.
+/// </summary>
+public sealed record BacktestRequest(BacktestDefinition Definition, string? SavedStrategyName = null);
 
 /// <summary>
 /// A create-or-update of a strategy concept. Carries the definition as a FilterNode rather than a

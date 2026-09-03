@@ -755,10 +755,89 @@ strategies backtest badly.
 > but throws `NotSupportedException` — a decided deferral, not an oversight.
 
 ### Phase 4 — Polish (~2–3 weeks)
-- [ ] Alerts: notify when a security enters/exits a saved strategy
-- [ ] Strategy sharing
-- [ ] Additional benchmarks (config rows)
-- [ ] README as product pitch (§13), 5 ADRs
+- [x] Alerts: notify when a security enters/exits a saved strategy — in-app feed, not email
+- [x] Strategy sharing — read-only links, not full auth
+- [x] Additional benchmarks (config rows)
+- [x] README as product pitch (§13), 5 ADRs — 3 written this phase, closing §11's remaining gap
+
+**Exit:** the four items above built, tested, and green.
+
+> **Exit status, honestly.**
+>
+> Two decisions were made explicitly with the user before implementation, rather than assumed,
+> because §14 leaves auth open and no notification infrastructure exists anywhere in the codebase:
+> **sharing is read-only share links, not ASP.NET Core Identity/Entra** (full multi-user auth is
+> judged out of scope for a 2-3 week polish phase, not a 3-5 month one), and **alerts are an in-app
+> feed, not email** (no SMTP/webhook dependency, reuses the existing GitHub-Actions-cron +
+> shared-secret-endpoint pattern §10 Phase 1 already established for nightly ingestion).
+>
+> **Alerts.** `ScreenRun` gained `SavedStrategyId` and `MemberSecuritiesJson` (populated only when a
+> saved strategy is behind the run, threaded through `ScreeningEngine.RunAsync`'s new
+> `savedStrategyId` parameter so both the cache-hit and cache-miss paths in `CachedScreeningEngine`
+> write it). A new `AlertEvent` entity records each entry/exit, computed by `AlertSetDiffer`
+> (`MarketEye.Application`, pure set arithmetic, unit-tested standalone) and written by `AlertDiffer`
+> (`MarketEye.Infrastructure`, the DB-touching wrapper around it) — mirroring the project's existing
+> pure-math/DB-orchestration split (`TechnicalIndicators`/`DailyIngestionJob`,
+> `BacktestMetricsCalculator`/`BacktestEngine`). A strategy's first-ever check writes zero events by
+> design: there is nothing yet to diff against, so day one is silent rather than flooding the feed
+> with every current member as a fake "entry." `AlertCheckJob` (`MarketEye.Ingestion`) mirrors
+> `DailyIngestionJob`'s plain-class-invoked-by-a-protected-endpoint shape exactly, and one strategy's
+> stale criteria (a vocabulary edit since it was saved) is skipped with a warning rather than
+> aborting the whole nightly batch — the same tolerance `/api/strategies/{name}/run` already has.
+> `POST /api/alerts/check` reuses the exact `X-Ingest-Secret`/`CryptographicOperations.FixedTimeEquals`
+> pattern guarding the ingest endpoints; `.github/workflows/nightly-ingest.yml` gained a
+> `check-alerts` job with `needs: trigger`, so alerts only ever check against a snapshot ingestion
+> just sealed. `/alerts` (Blazor) renders the feed per strategy.
+>
+> **Strategy sharing.** `SavedStrategy` gained `ShareToken`/`SharedAt` (a 32-byte CSPRNG token,
+> base64url-encoded, unique filtered index — set once, never auto-rotated, since rotating would
+> silently break every link already handed out). `BacktestRun` gained a parallel `SavedStrategyId`
+> link (there was none before this phase — a shared strategy's "last backtest" needed the same kind
+> of linkage this phase already introduced for `ScreenRun`), threaded from `Backtest.razor`'s
+> existing strategy-picker state through a new optional field on `BacktestRequest`, resolved to an
+> id server-side rather than trusted as posted. `GET /api/shared/{token}` is public, unauthenticated,
+> and deliberately its own route prefix — never nested under `/api/strategies/{name}` — so a token
+> holder cannot structurally reach an owner-only verb; there is no PUT/DELETE registered on that
+> prefix at all, so "read-only" is enforced by there being nothing else to call, not a runtime
+> check. `/shared/{token}` (Blazor) renders the interpreted criteria (via `CriteriaExplainer`,
+> pre-rendered server-side, mirroring `/api/vocabulary/strategy-concepts`'s existing `Explanation`
+> field) and the last backtest's equity curve and metrics, reusing `EquityCurveChart` unchanged.
+>
+> **Additional benchmarks.** `NiftyTotalReturnLoader.LoadAsync` now takes the ticker as a parameter
+> instead of hardcoding `"NIFTY50TR"` — loading a second real benchmark (NIFTY 500 TR is the
+> recommended second series: broader-market, more generally useful than a sector index, same
+> niftyindices.com manual-CSV mechanism `docs/adr/0010` already established) is a second call with a
+> different ticker, not new code. A new `GET /api/backtest/benchmarks` endpoint lists distinct
+> tickers actually present in `BenchmarkPrices`; `/backtest` renders these as a dropdown, falling
+> back to the original free-text ticker field when nothing has been loaded yet — which, until
+> someone runs the loader against a real download, is what actually renders today, unchanged from
+> before this phase.
+>
+> **Documentation.** Three retroactive ADRs close §11's remaining gap: `docs/adr/0011`
+> (pre-computed indicators, §4.3), `docs/adr/0012` (sealed data snapshots, §4.5), and `docs/adr/0013`
+> (tree-shaped DSL, flat v1 compiler, §6) — all three argue decisions already shipped in Phase 1,
+> not new design work. `README.md` gained a "What Phase 4 delivers" section and an updated Status
+> table row; its §9 performance-benchmark section, correctly marked "Outstanding," was deliberately
+> left untouched.
+>
+> **Verified:** `dotnet build MarketEye.sln` clean at 0 warnings/0 errors under
+> `TreatWarningsAsErrors`. `dotnet test tests/MarketEye.UnitTests`: 269/269 (up from 263 — six new
+> `AlertSetDifferTests` covering the pure diff logic in isolation). `MARKETEYE_INTEGRATION=1 dotnet
+> test tests/MarketEye.IntegrationTests`: 34/34 (up from 25) when run sequentially
+> (`-parallelMode none`) against a real SQL Server — running the full suite's Testcontainers in
+> parallel on this Apple Silicon host exhausts the emulated SQL Server containers' memory and
+> produces spurious startup failures unrelated to any test's own correctness (consistent with
+> `docs/adr/0006`'s already-recorded "SQL Server runs emulated on Apple Silicon" constraint); every
+> new test class also passed individually under the default parallel runner.
+> `MARKETEYE_INTEGRATION=1 dotnet test tests/MarketEye.BacktestTests`: 20/20, unchanged, confirming
+> `BacktestEngine.RunAsync`'s new `savedStrategyId` parameter didn't disturb the synthetic-market or
+> known-bad-strategy suites.
+>
+> **What's left, honestly:** `MarketEye.Web` (the Blazor UI, including the new `/alerts` and
+> `/shared/{token}` pages) has no deploy workflow anywhere in this repo — only
+> `.github/workflows/main_marketeye-api.yml` builds and deploys `MarketEye.Api`. This predates Phase
+> 4 and is unrelated to it, but it means the new pages exist in the repository without a documented
+> path to Azure the way the API's endpoints have.
 
 ---
 

@@ -4,8 +4,7 @@ namespace MarketEye.Domain.Entities;
 /// Pre-computed technical indicators for one security on one date (PLAN.md §4.3).
 ///
 /// Computed at ingest and stored, never at query time — screening must stay a flat indexable
-/// WHERE. This trades write amplification for read latency, argued in `docs/adr/0003`'s sibling
-/// ADR and §4.3.
+/// WHERE. This trades write amplification for read latency, argued in `docs/adr/0011` and §4.3.
 ///
 /// All values derive from <see cref="PriceBar.AdjClose"/>, not raw Close: an unadjusted series has
 /// a discontinuity at every split and bonus, which would put a false spike into every indicator.
