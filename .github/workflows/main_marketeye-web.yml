@@ -1,5 +1,12 @@
 # Docs for the Azure Web Apps Deploy action: https://github.com/Azure/webapps-deploy
 # More GitHub Actions for Azure: https://github.com/Azure/actions
+#
+# Mirrors main_marketeye-api.yml exactly, for the Blazor Server frontend instead of the API.
+# MarketEye.Web is already decoupled from MarketEye.Api at the network level -- it calls the API
+# over HTTP using a base URL read from config (Program.cs: builder.Services.AddHttpClient("api", ...)
+# reads Api:BaseUrl, defaulting to localhost:5199 for local dev) -- so deploying it to its own App
+# Service needs no code change, only the Api__BaseUrl app setting pointed at the deployed API
+# (see docs/azure-deployment-web-runbook.md).
 
 name: Build and deploy ASP.Net Core app to Azure Web App - marketeye-web
 
@@ -21,18 +28,30 @@ jobs:
       - name: Set up .NET Core
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.x'
+          # global.json pins 10.0.400; keep this in the same band so the runner
+          # does not resolve an SDK the solution refuses to build with.
+          dotnet-version: '10.0.x'
 
-      - name: Build with dotnet
-        run: dotnet build --configuration Release
+      # Restore the whole solution (project references span all 11 projects) but build and
+      # publish ONLY the Web frontend. Azure's Deployment Center wizard overwrote this file once
+      # already with its generic one-project-per-repo template (`dotnet build`/`dotnet publish`
+      # with no project argument) -- harmless for `build` since MarketEye.sln is the only project
+      # file at the repo root, but `publish` cannot target a solution with multiple publishable
+      # projects (the API and the Web frontend both qualify), so it must name this project
+      # explicitly. Same problem main_marketeye-api.yml's own comment documents for the API side.
+      - name: Restore
+        run: dotnet restore MarketEye.sln
 
-      - name: dotnet publish
-        run: dotnet publish -c Release -o ${{env.DOTNET_ROOT}}/myapp
+      - name: Build Web
+        run: dotnet build src/MarketEye.Web/MarketEye.Web.csproj --configuration Release --no-restore
+
+      - name: Publish Web
+        run: dotnet publish src/MarketEye.Web/MarketEye.Web.csproj -c Release --no-build -o ${{env.DOTNET_ROOT}}/myapp
 
       - name: Upload artifact for deployment job
         uses: actions/upload-artifact@v4
         with:
-          name: .net-app
+          name: .net-app-web
           path: ${{env.DOTNET_ROOT}}/myapp
 
   deploy:
@@ -46,8 +65,8 @@ jobs:
       - name: Download artifact from build job
         uses: actions/download-artifact@v4
         with:
-          name: .net-app
-      
+          name: .net-app-web
+
       - name: Login to Azure
         uses: azure/login@v2
         with:
@@ -62,4 +81,7 @@ jobs:
           app-name: 'marketeye-web'
           slot-name: 'Production'
           package: .
-          
+
+# Tests are deliberately absent from this workflow. ci.yml already runs them on
+# every push to main; duplicating them here doubles Actions minutes and lets a
+# deploy fail for a reason that has nothing to do with deploying.

@@ -151,33 +151,29 @@ git push origin main
    password as a repo secret, same choice the API runbook makes)
 5. **Save**
 
-This commits a second workflow file to the repo (something like
-`.github/workflows/marketeye-web_<random>.yml` or a variant of `main_marketeye-web.yml` with a
-different suffix) and adds three `AZUREAPPSERVICE_*` secrets, typically GUID-suffixed.
+This adds three `AZUREAPPSERVICE_*` secrets (GUID-suffixed) and, in practice, **overwrites
+`main_marketeye-web.yml` in place** with Azure's generic one-project-per-repo template — same
+filename, different contents, rather than a second file alongside it.
 
-### 4c. Reconcile the two workflow files — keep exactly one
+### 4c. Restore the explicit project path, keep Azure's real secret names
 
 ```bash
 git pull origin main
 ```
 
-Open whatever new workflow file Azure just committed and copy its three secret names (the
-`AZUREAPPSERVICE_CLIENTID_...`/`TENANTID_...`/`SUBSCRIPTIONID_...` lines under `azure/login@v2`).
-Then either:
-
-- **paste those exact secret names into `main_marketeye-web.yml`'s `azure/login` step**, replacing
-  the placeholder `AZUREAPPSERVICE_CLIENTID_WEB` / `_TENANTID_WEB` / `_SUBSCRIPTIONID_WEB` names, or
-- **rename the three GitHub secrets** (Settings → Secrets and variables → Actions) to
-  `AZUREAPPSERVICE_CLIENTID_WEB` / `_TENANTID_WEB` / `_SUBSCRIPTIONID_WEB` so the existing
-  `main_marketeye-web.yml` needs no edit.
-
-Either way, **delete Azure's auto-generated workflow file** once the secrets line up — two workflows
-both deploying to `marketeye-web` on every push race each other and double the Actions minutes,
-same reasoning the API runbook gives for not running tests twice.
+Azure's overwritten version runs `dotnet build`/`dotnet publish` with no project argument — harmless
+for `build` (there's exactly one `.sln` at the repo root), but `publish` cannot target a solution
+with multiple publishable projects (the API and the Web frontend both qualify), so it needs
+`src/MarketEye.Web/MarketEye.Web.csproj` named explicitly, same problem the API's own workflow
+already had to fix. Put the explicit `Restore`/`Build Web`/`Publish Web` steps back (see the
+version already in this repo's history, or `main_marketeye-api.yml` for the equivalent shape) —
+but **keep the three real `secrets.AZUREAPPSERVICE_CLIENTID_...`/`TENANTID_...`/`SUBSCRIPTIONID_...`
+names Azure just wrote in**, since those are the actual federated-credential secrets Deployment
+Center created for this app; do not put the old placeholder names back.
 
 ```bash
 git add -A
-git commit -m "Reconcile the auto-generated Web deploy workflow with the committed one"
+git commit -m "Restore explicit project targeting in the Web deploy workflow"
 git push origin main
 ```
 
