@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.HttpOverrides;
 using MarketEye.Web.Components;
+using MarketEye.Web.MarketData;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -16,6 +17,17 @@ builder.Services.AddHttpClient("api", (sp, client) =>
 });
 builder.Services.AddScoped(sp =>
     sp.GetRequiredService<IHttpClientFactory>().CreateClient("api"));
+
+// Homepage NIFTY 50 ticker only (MarketData/YahooFinanceClient.cs) -- a typed client so it never
+// collides with the plain HttpClient above, which every page injects directly for the API.
+// User-Agent is set because Yahoo's endpoint is known to reject requests carrying .NET's default
+// one.
+builder.Services.AddHttpClient<YahooFinanceClient>(client =>
+{
+    client.BaseAddress = new Uri("https://query1.finance.yahoo.com/");
+    client.DefaultRequestHeaders.UserAgent.ParseAdd(
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36");
+});
 
 var app = builder.Build();
 

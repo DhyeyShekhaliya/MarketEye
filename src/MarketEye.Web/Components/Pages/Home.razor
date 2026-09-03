@@ -1,7 +1,132 @@
-﻿@page "/"
+@page "/"
+@using MarketEye.Web.MarketData
+@inject YahooFinanceClient Yahoo
+@rendermode InteractiveServer
 
 <PageTitle>Home</PageTitle>
 
-<h1>Hello, world!</h1>
+<h1>MarketEye</h1>
 
-Welcome to your new app.
+<p class="lede">
+    A natural-language stock screener and backtester for Indian (NSE) equities. Start on
+    <a href="screen">Screen</a>, or explore <a href="strategies">Strategies</a> and
+    <a href="backtest">Backtest</a>.
+</p>
+
+<div class="panel">
+    <div class="panel-header">
+        <h2>NIFTY 50</h2>
+        <button class="link" @onclick="LoadAsync" disabled="@_loading">
+            @(_loading ? "Refreshing…" : "Refresh")
+        </button>
+    </div>
+
+    @if (_error is not null)
+    {
+        <div class="notice">
+            Could not load a live NIFTY 50 quote right now (@_error). This ticker reads from
+            Yahoo Finance's public endpoint on demand, not on a timer -- it has no uptime
+            guarantee, and no screen, backtest, or alert in this app depends on it.
+        </div>
+    }
+    else if (_quote is null)
+    {
+        <p><em>Loading…</em></p>
+    }
+    else
+    {
+        <div class="quote">
+            <span class="price">@_quote.Price.ToString("N2")</span>
+            <span class="@ChangeCssClass">
+                @Sign(_change)@_change.ToString("N2") (@Sign(_changePct)@_changePct.ToString("N2")%)
+            </span>
+        </div>
+        <p class="result-meta">
+            Prev close @_quote.PreviousClose.ToString("N2")
+            @if (_quote.DayHigh is { } h && _quote.DayLow is { } l)
+            {
+                <text>&nbsp;·&nbsp;Day range @l.ToString("N2")–@h.ToString("N2")</text>
+            }
+            &nbsp;·&nbsp;as of @_quote.AsOf.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+        </p>
+
+        @if (_quote.RecentCloses.Count > 1)
+        {
+            <svg viewBox="0 0 320 60" class="sparkline" preserveAspectRatio="none" role="img"
+                 aria-label="NIFTY 50 close, last month">
+                <polyline points="@SparklinePoints" fill="none" stroke="#2563eb" stroke-width="2" />
+            </svg>
+        }
+
+        <p class="fine-print">
+            Delayed quote from Yahoo Finance -- not MarketEye's own ingested data, and not used by
+            any screen, backtest, or alert in this app. Refreshed on demand, not automatically.
+        </p>
+    }
+</div>
+
+@code {
+    private YahooQuote? _quote;
+    private string? _error;
+    private bool _loading;
+    private decimal _change;
+    private decimal _changePct;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        _error = null;
+
+        try
+        {
+            _quote = await Yahoo.GetDailyQuoteAsync("^NSEI", CancellationToken.None);
+            if (_quote is null)
+            {
+                _error = "no data returned";
+            }
+            else
+            {
+                _change = _quote.Price - _quote.PreviousClose;
+                _changePct = _quote.PreviousClose == 0 ? 0 : _change / _quote.PreviousClose * 100;
+            }
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    private string ChangeCssClass => _change >= 0 ? "change-positive" : "change-negative";
+
+    private static string Sign(decimal value) => value >= 0 ? "+" : "";
+
+    // A compact sparkline, not EquityCurveChart -- that component's legend ("Portfolio") is
+    // backtest-specific wording that would misdescribe a plain price series.
+    private string SparklinePoints
+    {
+        get
+        {
+            var closes = _quote!.RecentCloses;
+            var minDate = closes[0].Date.DayNumber;
+            var maxDate = closes[^1].Date.DayNumber;
+            var dateSpan = Math.Max(1, maxDate - minDate);
+            var minClose = closes.Min(c => c.Close);
+            var maxClose = closes.Max(c => c.Close);
+            var closeSpan = maxClose - minClose == 0 ? 1 : maxClose - minClose;
+
+            var points = closes.Select(c =>
+            {
+                var x = (double)(c.Date.DayNumber - minDate) / dateSpan * 320;
+                var y = 60 - (double)((c.Close - minClose) / closeSpan) * 60;
+                return $"{x:F1},{y:F1}";
+            });
+            return string.Join(' ', points);
+        }
+    }
+}
