@@ -43,18 +43,28 @@ entirely and the screening and backtesting engines still work.
 
 ## Status
 
-**Phase 2 complete.** The prompt → criteria → results flow described above genuinely works: type a
-strategy in plain English, confirm the interpreted criteria against your own Strategy Vocabulary,
-and run it. All three of §10's Phase 2 exit criteria are met, including the `MarketEye.AiEvals`
-≥85% gate — measured at 100.0% on both axes (below). Backtesting (Phase 3) has not started, so the
-CAGR/Sharpe/drawdown figures in the block above remain illustrative.
+**Phase 2 complete. Phase 3 done and verified against real data.** The prompt → criteria → results
+flow described above genuinely works: type a strategy in plain English, confirm the interpreted
+criteria against your own Strategy Vocabulary, and run it. All three of §10's Phase 2 exit criteria
+are met, including the `MarketEye.AiEvals` ≥85% gate — measured at 100.0% on both axes (below).
+Backtesting runs end to end — `/backtest` builds a `BacktestDefinition` from a saved strategy, runs
+the full §7 rebalance loop (T+1 execution, India-calibrated costs and slippage, circuit-lock and
+delisting handling, dividend accrual) and renders the equity curve, assumptions panel, and
+gross/net metrics. §8.1's synthetic-market suite and §8.3's known-bad-strategy suite both pass
+against a real SQL Server, and caught a real split-adjustment bug during development (below). The
+backfill-snapshot gap that used to block real historical backtests is fixed and the local 5-year
+dataset is fully sealed — a real 3-year, quarterly-rebalanced backtest against actual NSE data ran
+end to end (below), and that same live run caught a second real bug in gross-vs-net reporting,
+also now fixed (below). The CAGR/Sharpe/drawdown figures in the block above are still illustrative
+placeholder numbers, not results from a specific published run — but the engine producing real
+numbers like them is no longer hypothetical.
 
 | Phase | State |
 |---|---|
 | 0 — Foundation | Complete |
 | 1 — Data pipeline + screener | Complete, with three qualified exit criteria (below) |
 | 2 — Intent translation | Complete, with three exit criteria measured and met (below) |
-| 3 — Backtesting | Not started |
+| 3 — Backtesting | Complete — §10 exit criteria met and verified against a real multi-year backtest (below) |
 | 4 — Polish | Not started |
 
 `PLAN.md` §10 builds the foundation before the flashy part on purpose, because the foundation is
@@ -84,6 +94,82 @@ what makes the rest credible — Phase 2 is where that argument gets tested for 
 - **Runs with no AI configured at all.** No `Ai:ApiKey` set means natural-language parsing falls
   back to a deterministic keyword parser — the manual filter builder and the whole rest of the app
   are unaffected, proving §2's claim that the model can be removed and the system below still works
+
+### What Phase 3 delivers so far
+
+- **The full §7 rebalance loop** (`BacktestEngine`) — point-in-time universe resolution (reusing
+  the screening engine's existing delisted-inclusive join, not a second implementation), T+1
+  execution, equal-weight target allocation, dividend accrual, and delisting exits at last price
+  (or zero for bankruptcy)
+- **Circuit-lock handling** (§7 revision 3) — a locked bar cannot be filled; the engine skips it
+  and searches forward within the same 5-day window missing prices use, dropping and logging the
+  trade if nothing fillable turns up. `PointInTimeGuard.RequireNotCircuitLocked` closes the last
+  gap in §8.2's guard table — all six guards now exist and throw rather than silently correct
+  (`docs/adr/0008`)
+- **Gross vs. net, computed honestly, not approximated.** Costs compound into share counts rather
+  than being a simple end-of-period subtraction, so the engine runs the whole simulation twice —
+  once at the configured India-calibrated 23bps + 5bps, once at zero — to report `CagrGross` and
+  `CagrNet` side by side, exactly as §7 requires (`docs/adr/0009`)
+- **CAGR, max drawdown, Sharpe, Sortino, win rate, and annualised turnover** (`BacktestMetricsCalculator`),
+  hand-rolled `decimal`/`double` arithmetic with no new dependency, consistent with the existing
+  indicator math's style
+- **NIFTY 50 total-return benchmark comparison**, sourced from a manually-loaded CSV rather than a
+  scraper (`NiftyTotalReturnLoader`, `docs/adr/0010`) — a config string, not an `IBenchmarkProvider`
+  interface, per §14's already-recorded decision. Missing benchmark data degrades to "no data"
+  rather than failing the run
+- **`/backtest`** — pick a saved strategy and a date range, run it, and see the equity curve next
+  to an assumptions panel sourced directly from what actually ran, never a hand-typed copy
+
+### Verified — §8.1 and §8.3, both against a real SQL Server
+
+The §8.1 synthetic-market suite (`MarketEye.BacktestTests/SyntheticMarket`, Docker-gated) — three
+securities, a 2-for-1 split, a dividend, and a bankruptcy delisting, hand-computed against a real
+SQL Server. Building it caught a genuine bug before any real backtest could hit it: the engine
+marks positions at raw `Close` (§4.4, §7) as it should, but a split or bonus issue changes both the
+share count and the price together — without adjusting the held share count on the action's
+effective date, a split would have shown as an artificial ~50% value drop that never happened
+economically. `BacktestPriceRepository.GetShareAdjustingActionsAsync` now applies Split/Bonus/
+Rights `AdjustmentFactor`s to held positions during the day-walk, and
+`SyntheticMarketEngineTests.A_stock_split_does_not_create_a_fake_value_drop` pins the fix. This is
+exactly the failure mode §8.1 exists to catch, caught by writing the suite rather than in production.
+
+The §8.3 known-bad-strategy suite (`KnownBadStrategyTests`, same folder) runs three scenarios: a
+negative-earnings + high-leverage + high-price screen loses money; buying the worst momentum
+(deeply oversold names that keep falling, not bouncing) loses money; and an indiscriminate,
+no-edge four-security basket (two winners, two losers, equal-weighted) lands at exactly its
+hand-computed blended average — 204,000 from 200,000, neither inflated nor deflated. "If
+everything you test looks profitable, that's a bug" (§8.3) now has a suite that would catch it.
+
+Both suites, plus the pre-existing bias guards, run green: `MARKETEYE_INTEGRATION=1 dotnet test
+tests/MarketEye.BacktestTests` passes all 20.
+
+### Two real bugs, found by actually running the thing — both fixed
+
+**1. The backfill-snapshot gap is fixed.** The historical backfill (§10 Phase 1) used to seal
+exactly one `DataSnapshot` for its whole date range rather than one per day, so
+`SnapshotLifecycle.LatestSealedAsync` — which `BacktestEngine` correctly reuses from the screening
+path — could only resolve the single date that backfill sealed. `/api/backtest` against an earlier
+historical window degraded gracefully (warned, skipped every rebalance, flat curve, no crash) but
+couldn't exercise a real multi-year strategy against the ~2.5M bars already sitting in `PriceBars`.
+Fixed with `SnapshotLifecycle.SealHistoricalSnapshotsAsync` — `BackfillService` now seals a
+snapshot per ingested day going forward, and the same method is exposed as
+`POST /api/ingest/seal-historical-snapshots` to repair an already-backfilled range without
+re-fetching anything. Run once locally over 2021-09-01–2026-09-01: **1,169 snapshots sealed in ~7
+seconds.**
+
+**2. A live multi-year backtest then caught a second bug: gross could come back higher than net.**
+Running `/api/backtest` for real — a 10-position, quarterly-rebalanced NSE screen over
+2022-01-03–2024-12-31 — surfaced `CagrNet` (7.5%) higher than `CagrGross` (3.5%), which is
+impossible with non-negative costs. The cause: the original design ran gross and net as two
+independent simulations, but weight-based rebalancing resizes every trade against the *current*
+portfolio value, so the lower net-of-costs value produced a genuinely different share count than
+the zero-cost run from the second rebalance onward — the two paths diverged, not just by a cash
+offset. All 20 `MarketEye.BacktestTests` stayed green throughout, because the §8.1/§8.3 fixtures
+are deliberately single-rebalance and never had a second rebalance for the paths to diverge across.
+Fixed by running the simulation once and deriving gross as `netNav + cumulativeCostsPaid` at every
+point on the same trading path — `CagrNet <= CagrGross` now holds by construction. Re-verified live
+after the fix: `CagrGross 5.57% >= CagrNet 5.11%` on the same 3-year backtest. Full account in
+`docs/adr/0009`.
 
 ### What Phase 1 actually delivered
 
@@ -174,7 +260,7 @@ Then, separately, `dotnet run --project src/MarketEye.Web` and open `http://loca
 
 ```bash
 curl localhost:5199/health              # Healthy
-dotnet test tests/MarketEye.UnitTests   # 231 tests, no Docker required
+dotnet test tests/MarketEye.UnitTests   # 263 tests, no Docker required
 ```
 
 Ingestion and screening:
@@ -208,10 +294,12 @@ curl -X POST localhost:5199/api/screen -H 'Content-Type: application/json' \
 
 Or in the browser: `/screen` for the interpretation panel and the manual filter builder,
 `/vocabulary` to read or edit what a word like "cheap" means, `/strategies` to save, re-run, and
-delete named screens.
+delete named screens, `/backtest` to run a saved strategy through the full §7 rebalance loop and
+see its equity curve, assumptions, and gross/net metrics.
 
 ```bash
-dotnet test tests/MarketEye.BacktestTests             # 11 tests, no Docker required
+dotnet test tests/MarketEye.BacktestTests             # 13 tests, no Docker required
+MARKETEYE_INTEGRATION=1 dotnet test tests/MarketEye.BacktestTests    # 20 tests (+4 synthetic-market, +3 known-bad), needs Docker
 MARKETEYE_INTEGRATION=1 dotnet test tests/MarketEye.IntegrationTests   # 25 tests, needs Docker running
 ```
 
@@ -220,6 +308,14 @@ is set — a bare `dotnet test` never needs Docker. When set, they start their o
 Server containers through Testcontainers (roughly 10–12s to first query, emulated on Apple
 Silicon — see `DEPENDENCIES.md`) and cover the vocabulary, screening pipeline, saved strategies,
 and `IntentTranslationService`'s cache/budget behaviour against a real database.
+
+`MarketEye.BacktestTests` follows the same pattern for its §8.1/§8.3 suites: 13 bias-guard tests
+run with no Docker; `MARKETEYE_INTEGRATION=1` additionally runs 4 §8.1 synthetic-market tests
+(three securities, a hand-computed split/dividend/bankruptcy delisting, asserting `BacktestEngine`'s
+output exactly — including that a stock split does not create a fake value drop, the specific
+regression this suite caught) and 3 §8.3 known-bad-strategy tests (bad fundamentals lose money,
+worst momentum loses money, a no-edge basket lands at exactly its blended average) against a real
+SQL Server.
 
 ```bash
 dotnet test tests/MarketEye.AiEvals                    # 4 tests, offline tier, no key required
@@ -282,16 +378,17 @@ section stays empty until there is a surface worth measuring on. See `docs/adr/0
 ```
 src/
   MarketEye.Domain/           entities, ScreenCriteria DSL, BacktestDefinition — zero dependencies
-  MarketEye.Application/      criteria compiler, screening engine, backtest engine
-  MarketEye.Infrastructure/   EF Core, Dapper, SqlBulkCopy, provider clients
-  MarketEye.Ai/               LLM client, concept resolution, parse cache, rate limiter
+  MarketEye.Application/      criteria compiler, indicator math, pure backtest math (Backtesting/)
+  MarketEye.Infrastructure/   EF Core, Dapper, SqlBulkCopy, provider clients, screening engine,
+                               backtest engine (Backtesting/) — anything that touches the database
+  MarketEye.Ai/                LLM client, concept resolution, parse cache, rate limiter
   MarketEye.Ingestion/        scheduled jobs, corporate actions, snapshot sealing
   MarketEye.Api/              ASP.NET Core Web API
   MarketEye.Web/              Blazor Server UI
 tests/
   MarketEye.UnitTests/        indicator math, compiler, validator, architecture guards
   MarketEye.IntegrationTests/ Testcontainers + real SQL Server
-  MarketEye.BacktestTests/    synthetic market + bias guards
+  MarketEye.BacktestTests/    bias guards + §8.1/§8.3 suites (13 tests + 7 Docker-gated)
   MarketEye.AiEvals/          prompt → expected-criteria suite, CI gate
 ```
 

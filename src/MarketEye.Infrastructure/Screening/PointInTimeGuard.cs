@@ -99,4 +99,22 @@ public static class PointInTimeGuard
                 "survivorship bias (§7, §8.2).");
         }
     }
+
+    /// <summary>
+    /// §7 revision 3: a circuit-locked stock cannot be filled at that price. This is a backstop
+    /// invariant, not the control flow — the fill logic checks <see cref="PriceBar.IsCircuitLocked"/>
+    /// itself and branches into the skip-and-carry-forward path BEFORE ever constructing a fill,
+    /// the same "re-check, don't trust" pattern <c>CriteriaCompiler</c> already uses for a sealed
+    /// snapshot. This guard exists to catch a future refactor that builds a fill without checking.
+    /// </summary>
+    public static void RequireNotCircuitLocked(PriceBar bar)
+    {
+        if (bar.IsCircuitLocked)
+        {
+            throw new LookaheadBiasException(
+                $"Security {bar.SecurityId} was circuit-locked on {bar.Date:yyyy-MM-dd}. A locked " +
+                "stock cannot be filled at that price (§7 revision 3); the caller must skip the " +
+                "fill and carry the trade forward instead of constructing an execution here.");
+        }
+    }
 }

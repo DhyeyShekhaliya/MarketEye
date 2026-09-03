@@ -1,0 +1,278 @@
+@page "/backtest"
+@using System.Net.Http.Json
+@using System.Text.Json.Nodes
+@inject HttpClient Http
+@rendermode InteractiveServer
+
+<PageTitle>Backtest — MarketEye</PageTitle>
+
+<h1>Backtest</h1>
+
+<p class="lede">
+    Pick a saved strategy and a date range. The rebalance loop fills at T+1's open, never at the
+    signal date's close, and every assumption below is exactly what ran — nothing here is
+    illustrative.
+</p>
+
+<ValidationErrors Message="@_networkError" />
+
+@if (_strategies is null)
+{
+    <p><em>Loading saved strategies…</em></p>
+}
+else if (_strategies.Count == 0)
+{
+    <div class="notice">
+        No saved strategies yet. Build and save one on the <a href="screen">Screen</a> page first —
+        a backtest replays a strategy's stored criteria, never a raw prompt.
+    </div>
+}
+else
+{
+    <div class="form">
+        <label>
+            Strategy
+            <select @bind="_selectedStrategyName">
+                <option value="">— choose —</option>
+                @foreach (var s in _strategies)
+                {
+                    <option value="@s.Name">@s.Name</option>
+                }
+            </select>
+        </label>
+
+        <label>Start date <input type="date" @bind="_startDate" /></label>
+        <label>End date <input type="date" @bind="_endDate" /></label>
+
+        <label>
+            Rebalance
+            <select @bind="_rebalanceFrequency">
+                <option value="Monthly">Monthly</option>
+                <option value="Quarterly">Quarterly</option>
+                <option value="Annual">Annual</option>
+            </select>
+        </label>
+
+        <label>
+            Execution price
+            <select @bind="_executionPrice">
+                <option value="NextOpen">Next open (T+1)</option>
+                <option value="NextClose">Next close</option>
+            </select>
+        </label>
+
+        <label>Max positions (optional) <input type="number" min="1" @bind="_maxPositions" /></label>
+        <label>Initial capital <input type="number" min="1" step="any" @bind="_initialCapital" /></label>
+        <label>Transaction cost (bps) <input type="number" min="0" @bind="_transactionCostBps" /></label>
+        <label>Slippage (bps) <input type="number" min="0" @bind="_slippageBps" /></label>
+        <label>Benchmark ticker <input type="text" @bind="_benchmarkTicker" placeholder="NIFTY50TR (blank to skip)" /></label>
+
+        <div class="actions">
+            <button class="primary" @onclick="RunAsync" disabled="@(_running || string.IsNullOrWhiteSpace(_selectedStrategyName))">
+                @(_running ? "Running…" : "Run backtest")
+            </button>
+        </div>
+    </div>
+}
+
+<ValidationErrors Errors="@_backtestErrors" Heading="The backtest was rejected." />
+
+@if (_result is not null)
+{
+    <div class="panel">
+        <h2>Assumptions</h2>
+        <p class="assumptions">
+            Rebalance: @_result.Definition["rebalanceFrequency"] &nbsp;·&nbsp;
+            Weighting: @_result.Definition["weightingMethod"] &nbsp;·&nbsp;
+            Execution: @_result.Definition["executionPrice"] <br />
+            Transaction cost: @_result.Definition["transactionCostBps"] bps &nbsp;·&nbsp;
+            Slippage: @_result.Definition["slippageBps"] bps &nbsp;·&nbsp;
+            Benchmark: @(_result.BenchmarkTicker ?? "none") <br />
+            Universe includes delisted securities. Costs are charged on traded notional, not
+            portfolio value.
+        </p>
+
+        <h2>Equity curve</h2>
+        @if (_result.EquityCurve.Count > 1)
+        {
+            <EquityCurveChart Portfolio="@_result.EquityCurve" Benchmark="@_result.BenchmarkCurve" />
+        }
+        else
+        {
+            <p><em>Not enough data points to draw a curve.</em></p>
+        }
+
+        <h2>Metrics</h2>
+        <table class="results">
+            <tbody>
+                <tr><td>CAGR (gross)</td><td class="num">@Pct(_result.CagrGross)</td></tr>
+                <tr><td>CAGR (net)</td><td class="num">@Pct(_result.CagrNet)</td></tr>
+                <tr><td>Max drawdown</td><td class="num">@Pct(_result.MaxDrawdown)</td></tr>
+                <tr><td>Sharpe</td><td class="num">@_result.Sharpe.ToString("N2")</td></tr>
+                <tr><td>Sortino</td><td class="num">@_result.Sortino.ToString("N2")</td></tr>
+                <tr><td>Win rate</td><td class="num">@Pct(_result.WinRate)</td></tr>
+                <tr><td>Annual turnover</td><td class="num">@Pct(_result.AnnualTurnover)</td></tr>
+                <tr><td>Total costs paid</td><td class="num">@_result.TotalCostsPaid.ToString("N2")</td></tr>
+                <tr><td>Final equity</td><td class="num">@_result.FinalEquity.ToString("N2")</td></tr>
+                @if (_result.BenchmarkCagr is { } benchCagr)
+                {
+                    <tr><td>Benchmark CAGR (@_result.BenchmarkTicker)</td><td class="num">@Pct(benchCagr)</td></tr>
+                }
+                else if (_result.BenchmarkTicker is not null)
+                {
+                    <tr><td>Benchmark CAGR (@_result.BenchmarkTicker)</td><td class="num">no data</td></tr>
+                }
+            </tbody>
+        </table>
+
+        <p class="result-meta">@_result.DurationMs ms · run #@_result.Id</p>
+    </div>
+}
+
+@code {
+    private List<StrategySummary>? _strategies;
+    private string _selectedStrategyName = "";
+
+    private DateOnly _startDate = DateOnly.FromDateTime(DateTime.UtcNow).AddYears(-3);
+    private DateOnly _endDate = DateOnly.FromDateTime(DateTime.UtcNow);
+    private string _rebalanceFrequency = "Monthly";
+    private string _executionPrice = "NextOpen";
+    private int? _maxPositions;
+    private decimal _initialCapital = 1_000_000m;
+    private int _transactionCostBps = 23;
+    private int _slippageBps = 5;
+    private string? _benchmarkTicker = "NIFTY50TR";
+
+    private bool _running;
+    private string? _networkError;
+    private Dictionary<string, string[]>? _backtestErrors;
+    private BacktestResultVm? _result;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _strategies = await Http.GetFromJsonAsync<List<StrategySummary>>("/api/strategies") ?? [];
+        }
+        catch (Exception ex)
+        {
+            _networkError = $"Could not load saved strategies: {ex.Message}";
+            _strategies = [];
+        }
+    }
+
+    private static string Pct(decimal fraction) => (fraction * 100).ToString("N1") + "%";
+
+    private async Task RunAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_selectedStrategyName)) return;
+
+        _running = true;
+        _networkError = null;
+        _backtestErrors = null;
+        _result = null;
+
+        try
+        {
+            // Fetch the strategy's raw criteria envelope rather than re-typing ScreenCriteria on
+            // the client -- the same "carry it opaquely" approach Screen.razor uses, so a nested
+            // shape change in ScreenCriteria never needs a matching change here.
+            var strategyNode = await Http.GetFromJsonAsync<JsonNode>($"/api/strategies/{_selectedStrategyName}");
+            var criteria = strategyNode?["criteria"]?.AsObject();
+            if (criteria is null)
+            {
+                _networkError = "Could not load the selected strategy's criteria.";
+                return;
+            }
+
+            var definition = new JsonObject
+            {
+                ["criteria"] = criteria.DeepClone(),
+                ["startDate"] = _startDate.ToString("yyyy-MM-dd"),
+                ["endDate"] = _endDate.ToString("yyyy-MM-dd"),
+                ["rebalanceFrequency"] = _rebalanceFrequency,
+                ["weightingMethod"] = "EqualWeight",
+                ["initialCapital"] = _initialCapital,
+                ["executionPrice"] = _executionPrice,
+                ["transactionCostBps"] = _transactionCostBps,
+                ["slippageBps"] = _slippageBps,
+                ["maxPositions"] = _maxPositions,
+                ["benchmarkTicker"] = string.IsNullOrWhiteSpace(_benchmarkTicker) ? null : _benchmarkTicker,
+            };
+
+            var response = await Http.PostAsJsonAsync("/api/backtest", new { definition });
+
+            if (response.IsSuccessStatusCode)
+            {
+                var node = await response.Content.ReadFromJsonAsync<JsonNode>();
+                _result = BacktestResultVm.FromJson(node!);
+            }
+            else
+            {
+                _backtestErrors = await ApiJson.ReadErrorsAsync(response);
+            }
+        }
+        catch (Exception ex)
+        {
+            _networkError = ex.Message;
+        }
+        finally
+        {
+            _running = false;
+        }
+    }
+
+    private sealed record StrategySummary(string Name, string? Description);
+
+    /// <summary>
+    /// Read from raw JSON rather than a strongly-typed response record: the equity/benchmark
+    /// curves and the echoed definition are exactly what the assumptions panel and the chart need
+    /// to render verbatim, and reading them as JsonObject/JsonArray avoids a second copy of every
+    /// field name that could drift from the API's actual shape.
+    /// </summary>
+    private sealed class BacktestResultVm
+    {
+        public long Id { get; init; }
+        public decimal CagrGross { get; init; }
+        public decimal CagrNet { get; init; }
+        public decimal MaxDrawdown { get; init; }
+        public decimal Sharpe { get; init; }
+        public decimal Sortino { get; init; }
+        public decimal WinRate { get; init; }
+        public decimal AnnualTurnover { get; init; }
+        public decimal TotalCostsPaid { get; init; }
+        public decimal FinalEquity { get; init; }
+        public string? BenchmarkTicker { get; init; }
+        public decimal? BenchmarkCagr { get; init; }
+        public int DurationMs { get; init; }
+        public JsonObject Definition { get; init; } = [];
+        public List<(DateOnly Date, decimal Nav)> EquityCurve { get; init; } = [];
+        public List<(DateOnly Date, decimal Nav)>? BenchmarkCurve { get; init; }
+
+        public static BacktestResultVm FromJson(JsonNode node) => new()
+        {
+            Id = node["id"]!.GetValue<long>(),
+            CagrGross = node["cagrGross"]!.GetValue<decimal>(),
+            CagrNet = node["cagrNet"]!.GetValue<decimal>(),
+            MaxDrawdown = node["maxDrawdown"]!.GetValue<decimal>(),
+            Sharpe = node["sharpe"]!.GetValue<decimal>(),
+            Sortino = node["sortino"]!.GetValue<decimal>(),
+            WinRate = node["winRate"]!.GetValue<decimal>(),
+            AnnualTurnover = node["annualTurnover"]!.GetValue<decimal>(),
+            TotalCostsPaid = node["totalCostsPaid"]!.GetValue<decimal>(),
+            FinalEquity = node["finalEquity"]!.GetValue<decimal>(),
+            BenchmarkTicker = node["benchmarkTicker"]?.GetValue<string?>(),
+            BenchmarkCagr = node["benchmarkCagr"] is { } bc && bc.GetValueKind() != System.Text.Json.JsonValueKind.Null
+                ? bc.GetValue<decimal>() : null,
+            DurationMs = node["durationMs"]!.GetValue<int>(),
+            Definition = node["definition"]!.AsObject(),
+            EquityCurve = ReadCurve(node["equityCurve"] as JsonArray),
+            BenchmarkCurve = node["benchmarkCurve"] is JsonArray arr ? ReadCurve(arr) : null,
+        };
+
+        private static List<(DateOnly, decimal)> ReadCurve(JsonArray? array) =>
+            (array ?? []).Select(n => (
+                DateOnly.Parse(n!["date"]!.GetValue<string>()),
+                n["nav"]!.GetValue<decimal>())).ToList();
+    }
+}

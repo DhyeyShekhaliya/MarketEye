@@ -1,3 +1,5 @@
+using Dapper;
+using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using MarketEye.Domain.Entities;
 using MarketEye.Infrastructure.Persistence;
@@ -85,4 +87,64 @@ public sealed class SnapshotLifecycle(MarketEyeDbContext db)
         snapshot.ProviderVersion = $"{snapshot.ProviderVersion} (abandoned)";
         await db.SaveChangesAsync(ct);
     }
+
+    /// <summary>
+    /// Seals one snapshot per date already present in <c>PriceBars</c> within [<paramref name="from"/>,
+    /// <paramref name="to"/>] that does not already have a sealed snapshot for that exact date.
+    ///
+    /// <see cref="LatestSealedAsync"/> can only resolve a date at or before a sealed snapshot's own
+    /// <c>AsOfDate</c> — so a screen or backtest run "as of" a historical date needs a snapshot
+    /// sealed AT that date, not just bars sitting in the table. <see cref="BackfillService"/>
+    /// historically sealed only one snapshot for its whole range (bars bulk-load in one pass,
+    /// deliberately not per-day, to stay linear rather than quadratic — see its own doc comment),
+    /// which left every earlier date in a backfilled range unresolvable for point-in-time reads.
+    /// This method is the fix, and is also what makes an already-backfilled range usable
+    /// retroactively without re-fetching or re-parsing a single bhavcopy file — it reads only the
+    /// bar dates and counts already sitting in <c>PriceBars</c>.
+    ///
+    /// Idempotent: a date that already has a sealed snapshot is left alone, so re-running this over
+    /// an overlapping range (a fresh nightly seal landing inside an old backfill window, say) never
+    /// creates a duplicate.
+    /// </summary>
+    public async Task<int> SealHistoricalSnapshotsAsync(
+        DateOnly from, DateOnly to, string providerVersion, CancellationToken ct)
+    {
+        var connectionString = db.Database.GetConnectionString()!;
+        await using var conn = new SqlConnection(connectionString);
+
+        // [RowCount] is bracket-quoted: unquoted, SQL Server parses ROWCOUNT as the SET ROWCOUNT
+        // keyword rather than an identifier, and the query fails with a syntax error right next to
+        // a token that looks perfectly innocent.
+        var candidates = (await conn.QueryAsync<DateRowCount>(new CommandDefinition("""
+            SELECT [Date], COUNT(*) AS [RowCount]
+            FROM dbo.PriceBars
+            WHERE [Date] BETWEEN @from AND @to
+            GROUP BY [Date]
+            ORDER BY [Date];
+            """, new { from, to }, cancellationToken: ct))).ToList();
+
+        if (candidates.Count == 0) return 0;
+
+        var alreadySealed = (await conn.QueryAsync<DateOnly>(new CommandDefinition("""
+            SELECT DISTINCT AsOfDate FROM dbo.DataSnapshots
+            WHERE AsOfDate BETWEEN @from AND @to AND SealedAt IS NOT NULL;
+            """, new { from, to }, cancellationToken: ct))).ToHashSet();
+
+        var sealedCount = 0;
+        foreach (var candidate in candidates)
+        {
+            if (alreadySealed.Contains(candidate.Date)) continue;
+
+            var snapshot = await OpenAsync(candidate.Date, providerVersion, ct);
+            await SealAsync(snapshot.Id, candidate.RowCount, fundamentalRows: 0, ct);
+            sealedCount++;
+        }
+
+        return sealedCount;
+    }
+
+    // int, not long: Dapper matches a record's primary constructor against the reader's actual
+    // column types, and COUNT(*) comes back as SQL int -- a declared `long` here fails to match
+    // and Dapper throws "no parameterless constructor or matching signature" instead of widening.
+    private sealed record DateRowCount(DateOnly Date, int RowCount);
 }

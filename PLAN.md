@@ -654,16 +654,105 @@ verified against a hand-checked sample of 20 securities.
 > in Ollama or another OpenAI-compatible host later is a config and DI change, not a rewrite.
 
 ### Phase 3 — Backtesting (~4–6 weeks) ← the differentiator
-- [ ] `BacktestDefinition` (§7) implemented exactly as specified
-- [ ] Point-in-time universe reconstruction; delisted securities included
-- [ ] Rebalance loop with T+1 execution, costs, slippage, dividend accrual
-- [ ] Metrics incl. turnover, costs paid, gross vs. net
-- [ ] Equity curve vs. SPY total return, **assumptions panel rendered alongside**
-- [ ] `MarketEye.BacktestTests`: synthetic market, bias guards, known-bad strategies (§8)
-- [ ] Optional: `OR` / `NOT` in the DSL compiler and UI
+- [x] `BacktestDefinition` (§7) implemented, with one documented deviation: `WeightingMethod` is
+      `EqualWeight`-only in v1 — decided with the user; see the exit note below
+- [x] Point-in-time universe reconstruction; delisted securities included — reuses
+      `CriteriaCompiler`'s existing delisted-inclusive join rather than a second implementation
+- [x] Rebalance loop with T+1 execution, costs, slippage, dividend accrual (`BacktestEngine`,
+      `src/MarketEye.Infrastructure/Backtesting/`)
+- [x] Metrics incl. turnover, costs paid, gross vs. net (`BacktestMetricsCalculator`, `docs/adr/0009`)
+- [x] Equity curve vs. NIFTY 50 total return, **assumptions panel rendered alongside** — `/backtest`;
+      benchmark comparison degrades gracefully to "no data" until `NiftyTotalReturnLoader` is run
+      against a real downloaded CSV (`docs/adr/0010`)
+- [x] `MarketEye.BacktestTests`: synthetic market, bias guards, known-bad strategies (§8) — 13
+      tests run with no Docker (11 pre-existing §8.2 guards + 2 new circuit-lock guard tests);
+      `MARKETEYE_INTEGRATION=1` additionally runs the §8.1 synthetic-market suite (4 tests) and
+      the §8.3 known-bad-strategy suite (3 tests) against a real SQL Server.
+- [ ] Optional: `OR` / `NOT` in the DSL compiler and UI — explicitly out of scope for Phase 3,
+      decided with the user (nothing in §7/§8 needs it; flat-AND + `MaxPositions`-by-sort suffices)
 
 **Exit:** Synthetic market matches hand-computed values exactly. Every §8.2 guard throws. Bad
 strategies backtest badly.
+
+> **Exit status, honestly.** The circuit-lock guard §7 revision 3 called out as missing
+> (`PointInTimeGuard.RequireNotCircuitLocked`) is implemented and tested, closing the last gap in
+> §8.2's guard table — all six guards now exist and are covered by 13 always-on tests. The engine,
+> metrics, benchmark plumbing, and `/backtest` UI are built, wired end to end, and the whole
+> solution (`dotnet build MarketEye.sln`) is clean at 0 warnings/0 errors under
+> `TreatWarningsAsErrors`.
+>
+> **The §8.1 synthetic market exit criterion is met**, though at 3 securities and a ~6-month
+> window rather than the ~5/24-month figure originally sketched — a single-rebalance design was
+> chosen deliberately to isolate universe resolution, T+1 fill, split/dividend/delisting handling
+> from multi-rebalance reweighting arithmetic (which the pure-function unit tests already cover
+> independently). `SyntheticMarketEngineTests` (`tests/MarketEye.BacktestTests/SyntheticMarket/`,
+> Docker-gated) seeds a 2-for-1 split, an INR 2.00 dividend, and a bankruptcy delisting, and asserts
+> `BacktestEngine`'s final equity, rebalance holdings, and gross/net equality against hand-derived
+> values, run against a real SQL Server via Testcontainers.
+>
+> **§8.3 is also met.** `KnownBadStrategyTests` (same folder) runs three scenarios against a real
+> SQL Server: buying negative-earnings + high-leverage + high-price stocks loses money; buying the
+> worst momentum (deeply oversold names that keep falling, not bouncing) loses money; and an
+> indiscriminate, no-edge four-security basket (two winners, two losers, equal-weighted) lands at
+> exactly its hand-computed blended average (204,000 from 200,000 -- not inflated, not deflated) --
+> the sharpest form of "if everything looks profitable, that's a bug." With
+> `MARKETEYE_INTEGRATION=1`, all 20 `MarketEye.BacktestTests` pass (13 always-on + 4 synthetic-
+> market + 3 known-bad-strategy); the full solution -- 263 `MarketEye.UnitTests`, 20
+> `MarketEye.BacktestTests`, 25 `MarketEye.IntegrationTests`, 4 `MarketEye.AiEvals` -- was run and
+> is green.
+>
+> **§10's Phase 3 exit criterion is now fully met**: synthetic market matches hand-computed values
+> exactly, every §8.2 guard throws, and known-bad strategies backtest badly -- all three verified
+> against a real SQL Server, not asserted in the abstract.
+>
+> **Building that suite caught a real bug before any real backtest could hit it.** The engine marks
+> positions at raw `Close` (§4.4, §7) as it should, but nothing initially adjusted the held share
+> count when a split or bonus issue's `AdjustmentFactor` took effect — a split would have shown as
+> an artificial ~50% portfolio value drop that never happened economically, since the raw price
+> legitimately halves on the ex-date but the share count must double in step. Fixed with a new
+> `BacktestPriceRepository.GetShareAdjustingActionsAsync` applied during the day-walk, and pinned by
+> `A_stock_split_does_not_create_a_fake_value_drop`. This is exactly the failure mode §8.1 exists to
+> catch, caught by writing the fixture rather than in a real strategy's numbers.
+>
+> **The data gap above is now RESOLVED.** `BackfillService` (Phase 1) used to seal exactly ONE
+> `DataSnapshot` for its whole backfill range rather than one per historical day, so
+> `SnapshotLifecycle.LatestSealedAsync` — which `BacktestEngine` correctly reuses unchanged from the
+> screening path — could only resolve the single date backfill happened to seal. Fixed two ways:
+> (1) `BackfillService.RunAsync` now seals one snapshot per day that received bars, via a new
+> `SnapshotLifecycle.SealHistoricalSnapshotsAsync(from, to, providerVersion, ct)` that reads only
+> the dates/counts already sitting in `PriceBars` — no re-parsing, no re-derivation, so this stays a
+> cheap third pass rather than reintroducing the O(days²) cost pass 1's own comment warns against;
+> (2) the same method is exposed as `POST /api/ingest/seal-historical-snapshots` (shared-secret
+> protected, same pattern as the other ingest endpoints) so already-backfilled ranges can be
+> repaired retroactively without re-fetching a single bhavcopy file. Run once locally over the full
+> `2021-09-01`–`2026-09-01` range: **1,169 snapshots sealed in ~7 seconds.**
+>
+> **Verified with a real multi-year backtest against real data, not a synthetic fixture.** `/api/backtest`
+> for a 10-position, quarterly-rebalanced NSE screen over 2022-01-03–2024-12-31 (real Indian
+> equities, real corporate actions, real everything) ran in ~5s: `1,000,000 → 1,160,875`,
+> `CagrGross 5.57%`, `CagrNet 5.11%`, `MaxDrawdown -22.9%`, `Sharpe 0.41`, `TotalCostsPaid 15,234`.
+>
+> **That same live run caught a second real bug**, this one in gross-vs-net (`docs/adr/0009`'s
+> design as originally implemented): running gross and net as two independent simulations meant
+> weight-based rebalancing resized every trade against each simulation's OWN current portfolio
+> value, so a lower net-of-costs value at rebalance N produced a genuinely different share count
+> than the zero-cost run from rebalance N onward — not just a cash offset. Over several rebalances
+> the two paths diverged enough that the first live 3-year run showed **`CagrNet` (7.5%) HIGHER
+> than `CagrGross` (3.5%)**, which is economically impossible with non-negative costs. All 20
+> `MarketEye.BacktestTests` were green throughout — the single-rebalance §8.1/§8.3 fixtures never
+> had enough rebalances for the two paths to diverge, so this only surfaced against a real multi-
+> rebalance backtest. Fixed by no longer running two simulations at all: `BacktestEngine` now runs
+> once at real costs and derives the gross curve by adding cumulative costs paid back onto that same
+> trading path (`grossNav = netNav + cumulativeCostsAtThatPoint`), which guarantees `CagrNet <=
+> CagrGross` by construction, since the only thing separating the two curves at any point is
+> non-negative costs paid so far. Re-run after the fix: `CagrGross 5.57% >= CagrNet 5.11%`, correct.
+> This is exactly why §10 asks for the exit criteria to be run for real, not just asserted against
+> synthetic fixtures — the synthetic suite proved the mechanics right; only a real multi-rebalance
+> run could have caught this one.
+>
+> **What's left, honestly:** the data gap above (Phase 1 work, not Phase 3), and the optional
+> `OR`/`NOT` DSL work that was explicitly deferred. `WeightingMethod.MarketCapWeight` is modelled
+> but throws `NotSupportedException` — a decided deferral, not an oversight.
 
 ### Phase 4 — Polish (~2–3 weeks)
 - [ ] Alerts: notify when a security enters/exits a saved strategy
@@ -795,3 +884,9 @@ moved to Phase 2 · realistic timeline (§10) · backfill and licensing risks (�
       the metric's actual unit (`MetricConceptSeed`'s new `INR_CR`, corrected thresholds,
       `CriteriaExplainer`'s rendering, the system prompt's crore-conversion rule) rather than by
       rescaling `RatioCalculator`, which would have broken the ratios that are correct today.
+- [x] **`BacktestDefinition.WeightingMethod` scope — RESOLVED: EqualWeight only in v1,
+      `MarketCapWeight` deferred.** §7's literal listing ("EqualWeight (v1) | MarketCapWeight") was
+      ambiguous about whether both ship together; decided with the user rather than assumed.
+      `WeightingMethod` still models both cases (mirrors §6's OR/NOT precedent — represent the
+      option, reject it explicitly) but `PortfolioWeighting.MarketCapWeight` throws
+      `NotSupportedException` until a later phase builds it out.

@@ -16,6 +16,8 @@ using MarketEye.Application.Screening;
 using MarketEye.Domain.Screening;
 using MarketEye.Domain.Screening.Vocabulary;
 using MarketEye.Infrastructure.Ai;
+using MarketEye.Infrastructure.Backtesting;
+using MarketEye.Infrastructure.MarketData.Benchmark;
 
 namespace MarketEye.Infrastructure.DependencyInjection;
 
@@ -151,6 +153,16 @@ public static class InfrastructureServiceCollectionExtensions
         // cache-free above -- Phase 3's backtester needs the uncached path, since a backtest
         // replays many distinct historical dates that would each be a one-time cache key anyway.
         services.AddScoped<CachedScreeningEngine>();
+
+        // --- Backtesting (§7) -------------------------------------------------------------
+        //
+        // BacktestEngine depends on the plain ScreeningEngine above, never CachedScreeningEngine,
+        // confirming the comment on it: a backtest replays many distinct historical dates that
+        // would each be a one-time cache key anyway.
+        services.AddSingleton(sp => new BacktestPriceRepository(cs));
+        services.AddScoped<FillExecutor>();
+        services.AddScoped<BacktestEngine>();
+        services.AddSingleton(sp => new NiftyTotalReturnLoader(cs));
 
         // IIntentParser is registered by MarketEye.Ai's own AddMarketEyeAi (Program.cs calls both
         // extensions before Build()), never referenced here by name -- this factory only takes the

@@ -21,6 +21,8 @@ using MarketEye.Application.Screening;
 using MarketEye.Domain.Screening;
 using MarketEye.Domain.Screening.Vocabulary;
 using MarketEye.Infrastructure.Vocabulary;
+using MarketEye.Domain.Backtesting;
+using MarketEye.Infrastructure.Backtesting;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -370,6 +372,56 @@ app.MapPost("/api/screen", async (
     }
 });
 
+// --- Backtesting (§7) --------------------------------------------------------------------------
+//
+// One synchronous call: RunAsync walks the whole rebalance loop and persists the result before
+// returning. Backtests over a multi-year window with several rebalances can take real wall-clock
+// time -- there is no progress/streaming endpoint in v1, matching §10's scope.
+app.MapPost("/api/backtest", async (
+    BacktestRequest request,
+    BacktestEngine engine,
+    CancellationToken ct) =>
+{
+    try
+    {
+        var run = await engine.RunAsync(request.Definition, ct);
+        return Results.Ok(new
+        {
+            run.Id,
+            run.RunAt,
+            run.StartDate,
+            run.EndDate,
+            run.InitialCapital,
+            run.FinalEquity,
+            run.CagrGross,
+            run.CagrNet,
+            run.MaxDrawdown,
+            run.Sharpe,
+            run.Sortino,
+            run.WinRate,
+            run.AnnualTurnover,
+            run.TotalCostsPaid,
+            run.BenchmarkTicker,
+            run.BenchmarkCagr,
+            EquityCurve = JsonSerializer.Deserialize<JsonElement>(run.EquityCurveJson),
+            BenchmarkCurve = run.BenchmarkCurveJson is null
+                ? (JsonElement?)null : JsonSerializer.Deserialize<JsonElement>(run.BenchmarkCurveJson),
+            Definition = request.Definition,
+            run.DurationMs,
+            disclaimer = "Educational purposes only. Not investment advice.",
+        });
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+    {
+        // §5.1's pattern extended to backtesting: a rejected definition (bad date range, an
+        // unsealed/nonexistent snapshot, an invalid criteria tree) is an answer, not a server error.
+        return Results.ValidationProblem(new Dictionary<string, string[]>
+        {
+            ["definition"] = [ex.Message],
+        });
+    }
+});
+
 // --- Saved strategies (§10: "core workflow, not polish") -------------------------------------
 //
 // Stores resolved criteria, not the prompt that produced them: a saved strategy reproduces
@@ -585,6 +637,35 @@ app.MapPost("/api/ingest/backfill", async (
     return Results.Ok(report);
 });
 
+// Retroactive repair for data ingested before BackfillService sealed a snapshot per day (it used
+// to seal only one, for the final date -- see BackfillService.RunAsync's comment). Reads only
+// dates/counts already sitting in PriceBars; makes no external calls, re-parses nothing. §7's
+// point-in-time backtesting needs a sealed snapshot at every historical date it might resolve
+// against, not just bars in the table -- SnapshotLifecycle.LatestSealedAsync can only find a date
+// that was actually sealed.
+app.MapPost("/api/ingest/seal-historical-snapshots", async (
+    HttpContext http,
+    IConfiguration config,
+    SnapshotLifecycle snapshots,
+    DateOnly from,
+    DateOnly to,
+    CancellationToken ct) =>
+{
+    var expected = config["Ingestion:TriggerSecret"];
+    if (string.IsNullOrWhiteSpace(expected)) return Results.Problem(
+        detail: "Ingestion:TriggerSecret is not configured.", statusCode: 503);
+
+    var provided = http.Request.Headers["X-Ingest-Secret"].ToString();
+    if (!CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(provided), Encoding.UTF8.GetBytes(expected)))
+    {
+        return Results.Unauthorized();
+    }
+
+    var sealedCount = await snapshots.SealHistoricalSnapshotsAsync(from, to, "retroactive-repair/1", ct);
+    return Results.Ok(new { from, to, snapshotsSealed = sealedCount });
+});
+
 // Fundamentals and corporate actions. Separate from the price ingest because it consumes the
 // provider's 500/day quota, while the bhavcopy path does not (ADR-0005).
 app.MapPost("/api/ingest/fundamentals", async (
@@ -700,6 +781,9 @@ public sealed record ScreenRequest(ScreenCriteria Criteria, DateOnly? AsOfDate);
 
 /// <summary>Request body for POST /api/parse.</summary>
 public sealed record ParseRequest(string Prompt);
+
+/// <summary>Request body for POST /api/backtest.</summary>
+public sealed record BacktestRequest(BacktestDefinition Definition);
 
 /// <summary>
 /// A create-or-update of a strategy concept. Carries the definition as a FilterNode rather than a

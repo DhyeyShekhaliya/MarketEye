@@ -66,16 +66,63 @@ price (or zero for bankruptcy) — removing them is survivorship bias.
 **`ScreenCriteria` is a tree, implemented flat (§6).** Model `Group`/`Comparison` as a tree from day
 one — types, JSON schema, validator all walk a tree — but v1 compiles only a single flat `AND`.
 `OR`/`NOT` is Phase 3+. Do not flatten the type to save effort now; that creates a rewrite later.
+(Deliberately still out of scope after Phase 3 shipped — see `PLAN.md` §10's Phase 3 exit note.)
+
+**A DB-touching backtest/screening component lives in `MarketEye.Infrastructure`, never
+`MarketEye.Application` (§2).** `MarketEye.Application`'s `ProjectReference`s must equal exactly
+`["MarketEye.Domain"]` — enforced by `tests/MarketEye.UnitTests/Architecture/RepositoryLayoutTests.cs`.
+`BacktestEngine`, `BacktestPriceRepository`, and `FillExecutor` all need EF/Dapper/SQL and so live
+in `src/MarketEye.Infrastructure/Backtesting/`, mirroring `ScreeningEngine`'s placement. Pure
+backtest math with no database dependency (`RebalanceScheduler`, `PortfolioWeighting`,
+`TradeListBuilder`, `TransactionCostModel`, `MissingPriceCarryForward`, `BacktestMetricsCalculator`)
+lives in `src/MarketEye.Application/Backtesting/`, mirroring `TechnicalIndicators.cs`/
+`CriteriaCompiler.cs`. `BacktestDefinition` itself (a value type, zero deps) lives in
+`src/MarketEye.Domain/Backtesting/`, mirroring `ScreenCriteria`.
 
 ## Testing the backtester
 
 The backtester is the component most able to be confidently wrong, so it has its own rules (§8):
 
-- The **synthetic market** (~5 securities, 24 months, one split, one dividend, one delisting,
-  hand-computed expected values) is the primary correctness test. Real market data has no ground truth.
+- The **synthetic market** (§8.1) is the primary correctness test. Real market data has no ground
+  truth. `tests/MarketEye.BacktestTests/SyntheticMarket/SyntheticMarketEngineTests.cs` (Docker-
+  gated, `MARKETEYE_INTEGRATION=1`) seeds 3 securities, a split, a dividend, and a bankruptcy
+  delisting into a real SQL Server and asserts `BacktestEngine`'s output against hand-derived
+  values. Building it caught a real bug: positions are marked at raw `Close`, so a split/bonus
+  needs its held share count adjusted in step or the portfolio shows a fake value drop — fixed by
+  `BacktestPriceRepository.GetShareAdjustingActionsAsync`, pinned by
+  `A_stock_split_does_not_create_a_fake_value_drop`.
 - Bias guards must **throw in the repository layer**, not be enforced by convention or code review.
+  All six §8.2 guards are implemented in `PointInTimeGuard`
+  (`src/MarketEye.Infrastructure/Screening/PointInTimeGuard.cs`), including
+  `RequireNotCircuitLocked` for §7 revision 3's circuit-limit rule — a locked bar cannot be filled,
+  so the fill logic (`FillExecutor`) skips it and searches forward rather than trading through it.
 - Known-bad strategies must backtest badly. If everything you test looks profitable, that is a bug.
+  `tests/MarketEye.BacktestTests/SyntheticMarket/KnownBadStrategyTests.cs` (same Docker gate) covers
+  three scenarios: negative-earnings + high-leverage + high-price loses money; buying the worst
+  momentum (oversold names that keep falling, not bouncing) loses money; and an indiscriminate,
+  no-edge basket lands at exactly its hand-computed blended average rather than an inflated one.
 - Indicator math is tested against published reference values, never against its own output.
+  `BacktestMetricsCalculatorTests` (`tests/MarketEye.UnitTests/Backtesting/`) applies the same rigor
+  to CAGR/max-drawdown/Sharpe/Sortino — expected values are either exact closed-form (chosen
+  deliberately so `sqrt` terms cancel) or cross-checked with an independent script, asserted with
+  `BeApproximately`, never against the function's own prior output.
+
+**Two real bugs were found by actually running a live backtest, not by inspection — both fixed.**
+(1) `BackfillService` used to seal one `DataSnapshot` for its whole range rather than one per day,
+so `SnapshotLifecycle.LatestSealedAsync` could only resolve the single date it sealed. Fixed by
+`SnapshotLifecycle.SealHistoricalSnapshotsAsync` (seals per day going forward; also exposed as
+`POST /api/ingest/seal-historical-snapshots` to repair an already-backfilled range with no
+re-fetching). (2) A real multi-year, multi-rebalance backtest then showed `CagrNet` HIGHER than
+`CagrGross` — impossible with non-negative costs, and invisible to every §8.1/§8.3 test because
+those fixtures are deliberately single-rebalance. Cause: gross and net used to run as two
+*independent* simulations, and weight-based rebalancing resizes trades against each simulation's
+own current value, so the two ran genuinely different trading paths after the first rebalance, not
+the same path with a cash offset. Fixed by running the simulation once and deriving
+`grossNav = netNav + cumulativeCostsAtThatPoint` on the SAME path — `CagrNet <= CagrGross` now
+holds by construction. Full account: `docs/adr/0009`. **Takeaway for future rebalance-loop
+changes:** the synthetic fixtures cannot catch a bug that only manifests across multiple
+rebalances — a real multi-year `/api/backtest` run is part of validating any such change, not
+optional polish.
 
 ## Decisions already made — do not re-propose
 

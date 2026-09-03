@@ -19,6 +19,13 @@ public class PointInTimeGuardTests
         DelistedDate = delisted is null ? null : DateOnly.Parse(delisted),
     };
 
+    private static PriceBar Bar(int securityId, string date, bool circuitLocked) => new()
+    {
+        SecurityId = securityId, Date = DateOnly.Parse(date),
+        Open = 100, High = 100, Low = 100, Close = 100, AdjClose = 100, Volume = 1000,
+        IsCircuitLocked = circuitLocked,
+    };
+
     [Fact]
     public void Reading_an_unsealed_snapshot_throws()
     {
@@ -130,5 +137,28 @@ public class PointInTimeGuardTests
 
         var act = () => PointInTimeGuard.RequireDelistedIncluded(universe, all, asOf);
         act.Should().NotThrow("OLDCO had already delisted before the as-of date");
+    }
+
+    [Fact]
+    public void Filling_a_circuit_locked_bar_throws()
+    {
+        // §7 revision 3: a locked stock cannot be filled at that price. FillExecutor is expected
+        // to check IsCircuitLocked itself and never reach this call for a locked bar -- this guard
+        // is the backstop that catches a future refactor that skips that check.
+        var bar = Bar(1, "2024-06-28", circuitLocked: true);
+
+        var act = () => PointInTimeGuard.RequireNotCircuitLocked(bar);
+
+        act.Should().Throw<LookaheadBiasException>().WithMessage("*circuit-locked*");
+    }
+
+    [Fact]
+    public void Filling_an_unlocked_bar_is_allowed()
+    {
+        var bar = Bar(1, "2024-06-28", circuitLocked: false);
+
+        var act = () => PointInTimeGuard.RequireNotCircuitLocked(bar);
+
+        act.Should().NotThrow();
     }
 }

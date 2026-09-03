@@ -24,6 +24,9 @@ public class MarketEyeDbContext(DbContextOptions<MarketEyeDbContext> options) : 
     public DbSet<ScreenRun> ScreenRuns => Set<ScreenRun>();
     public DbSet<ApiCallBudget> ApiCallBudgets => Set<ApiCallBudget>();
     public DbSet<SavedStrategy> SavedStrategies => Set<SavedStrategy>();
+    public DbSet<BacktestRun> BacktestRuns => Set<BacktestRun>();
+    public DbSet<BacktestRebalance> BacktestRebalances => Set<BacktestRebalance>();
+    public DbSet<BenchmarkPrice> BenchmarkPrices => Set<BenchmarkPrice>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {
@@ -250,6 +253,58 @@ public class MarketEyeDbContext(DbContextOptions<MarketEyeDbContext> options) : 
             // HasFilter(null) restores SQL Server's own NULL-equality semantics, so with every
             // owner null today exactly one strategy may claim a given name.
             e.HasIndex(x => new { x.Name, x.OwnerUserId }).IsUnique().HasFilter(null);
+        });
+
+        b.Entity<BacktestRun>(e =>
+        {
+            e.ToTable("BacktestRuns");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.DefinitionJson).IsRequired();
+            e.Property(x => x.EquityCurveJson).IsRequired();
+            e.Property(x => x.BenchmarkTicker).HasMaxLength(32);
+
+            foreach (var p in new[]
+                     {
+                         nameof(BacktestRun.InitialCapital), nameof(BacktestRun.FinalEquity),
+                         nameof(BacktestRun.TotalCostsPaid),
+                     })
+            {
+                e.Property(p).HasPrecision(20, 2);
+            }
+            foreach (var p in new[]
+                     {
+                         nameof(BacktestRun.CagrGross), nameof(BacktestRun.CagrNet),
+                         nameof(BacktestRun.MaxDrawdown), nameof(BacktestRun.Sharpe),
+                         nameof(BacktestRun.Sortino), nameof(BacktestRun.WinRate),
+                         nameof(BacktestRun.AnnualTurnover), nameof(BacktestRun.BenchmarkCagr),
+                     })
+            {
+                e.Property(p).HasPrecision(18, 6);
+            }
+
+            e.HasIndex(x => x.RunAt);
+            e.HasMany(x => x.Rebalances).WithOne(x => x.BacktestRun!)
+                .HasForeignKey(x => x.BacktestRunId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<BacktestRebalance>(e =>
+        {
+            e.ToTable("BacktestRebalances");
+            e.HasKey(x => x.Id);
+            e.Property(x => x.HoldingsJson).IsRequired();
+            e.Property(x => x.CashAfter).HasPrecision(20, 2);
+            e.Property(x => x.PortfolioValueAfter).HasPrecision(20, 2);
+            e.Property(x => x.CostsPaid).HasPrecision(20, 2);
+            e.Property(x => x.TurnoverPct).HasPrecision(18, 6);
+            e.HasIndex(x => new { x.BacktestRunId, x.SignalDate });
+        });
+
+        b.Entity<BenchmarkPrice>(e =>
+        {
+            e.ToTable("BenchmarkPrices");
+            e.HasKey(x => new { x.Ticker, x.Date });
+            e.Property(x => x.Ticker).HasMaxLength(32).IsRequired();
+            e.Property(x => x.TotalReturnIndexValue).HasPrecision(18, 4);
         });
     }
 }

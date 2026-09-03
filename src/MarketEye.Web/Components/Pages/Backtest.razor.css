@@ -1,0 +1,26 @@
+.lede { color: #555; max-width: 66ch; }
+
+.form { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .75rem 1rem;
+        margin: 1rem 0 1.5rem; max-width: 60rem; }
+.form label { display: flex; flex-direction: column; gap: .3rem; font-weight: 600; font-size: .85rem; color: #444; }
+.form select, .form input { padding: .4rem .5rem; font-weight: normal; }
+.form .actions { grid-column: 1 / -1; }
+
+.actions { display: flex; gap: .75rem; align-items: center; margin: 1rem 0; }
+.actions button { padding: .4rem .9rem; }
+.actions .primary { font-weight: 600; }
+
+.panel { margin: 1rem 0 1.5rem; padding: 1rem 1.25rem; border: 1px solid #ddd; border-radius: 6px;
+         background: #fcfcfc; }
+.panel h2 { font-size: 1.05rem; margin: 1.25rem 0 .5rem; }
+.panel h2:first-child { margin-top: 0; }
+
+.assumptions { color: #444; font-size: .9rem; line-height: 1.6; }
+
+table.results { border-collapse: collapse; width: 100%; max-width: 32rem; }
+table.results td { border-bottom: 1px solid #e3e3e3; padding: .4rem .6rem; text-align: left; }
+table.results .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.result-meta { color: #555; font-size: .85rem; margin: .75rem 0 0; }
+
+.notice { padding: .6rem .8rem; border-radius: 4px; margin: 1rem 0; background: #f7f7f7; border: 1px solid #ddd; color: #444; }

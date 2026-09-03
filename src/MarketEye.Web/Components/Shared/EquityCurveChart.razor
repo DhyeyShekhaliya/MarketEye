@@ -1,0 +1,65 @@
+@*
+    Inline SVG, no charting library. wwwroot/lib carries only bootstrap today, and a single
+    polyline chart is not worth a new CDN dependency for.
+*@
+@if (Portfolio.Count > 1)
+{
+    <svg viewBox="0 0 @Width @Height" class="equity-curve" preserveAspectRatio="none" role="img"
+         aria-label="Equity curve">
+        <polyline points="@PortfolioPoints" fill="none" stroke="#2563eb" stroke-width="2" />
+        @if (BenchmarkPoints is not null)
+        {
+            <polyline points="@BenchmarkPoints" fill="none" stroke="#9ca3af" stroke-width="1.5" stroke-dasharray="4,3" />
+        }
+    </svg>
+    <div class="chart-legend">
+        <span class="swatch portfolio"></span> Portfolio
+        @if (BenchmarkPoints is not null)
+        {
+            <span class="swatch benchmark"></span> <span>@BenchmarkLabel</span>
+        }
+    </div>
+}
+
+@code {
+    private const int Width = 800;
+    private const int Height = 240;
+    private const int Padding = 8;
+
+    [Parameter, EditorRequired]
+    public required List<(DateOnly Date, decimal Nav)> Portfolio { get; set; }
+
+    [Parameter]
+    public List<(DateOnly Date, decimal Nav)>? Benchmark { get; set; }
+
+    [Parameter]
+    public string BenchmarkLabel { get; set; } = "Benchmark";
+
+    private string PortfolioPoints => ToPoints(Portfolio);
+    private string? BenchmarkPoints => Benchmark is { Count: > 1 } ? ToPoints(Benchmark) : null;
+
+    private string ToPoints(List<(DateOnly Date, decimal Nav)> series)
+    {
+        // Scaled against THIS series' own min/max date, and against the combined min/max NAV of
+        // both series -- otherwise a benchmark that ends up materially above or below the
+        // portfolio would be drawn off-scale relative to it.
+        var minDate = Portfolio[0].Date.DayNumber;
+        var maxDate = Portfolio[^1].Date.DayNumber;
+        var dateSpan = Math.Max(1, maxDate - minDate);
+
+        var allNavs = Portfolio.Select(p => p.Nav).Concat(Benchmark?.Select(p => p.Nav) ?? []).ToList();
+        var minNav = allNavs.Min();
+        var maxNav = allNavs.Max();
+        var navSpan = maxNav - minNav;
+        if (navSpan == 0) navSpan = 1;
+
+        var points = series.Select(p =>
+        {
+            var x = Padding + (double)(p.Date.DayNumber - minDate) / dateSpan * (Width - 2 * Padding);
+            var y = Height - Padding - (double)((p.Nav - minNav) / navSpan) * (Height - 2 * Padding);
+            return $"{x:F1},{y:F1}";
+        });
+
+        return string.Join(' ', points);
+    }
+}

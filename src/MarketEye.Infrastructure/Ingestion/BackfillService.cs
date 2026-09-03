@@ -107,12 +107,16 @@ public sealed class BackfillService(
         var delisted = await delistings.DetectAsync(ct);
         report.DelistedDetected = delisted.MarkedDelisted;
 
-        // Seal one snapshot for the final date, so screens have something to resolve against.
+        // Seal one snapshot PER DAY that received bars, not just the final date -- §7's point-in-
+        // time backtesting needs to resolve a sealed snapshot at any historical rebalance date, and
+        // SnapshotLifecycle.LatestSealedAsync can only ever find a date at or before one that was
+        // actually sealed. Sealing here is a cheap third pass over data already in PriceBars (no
+        // re-parsing, no re-derivation) -- it does not reintroduce the O(days²) cost pass 1's doc
+        // comment warns about, which was about re-reading and re-deriving each day, not this.
         if (report.BarsWritten > 0)
         {
-            var snapshot = await snapshots.OpenAsync(to, "nse-bhavcopy-archive/1", ct);
-            await snapshots.SealAsync(snapshot.Id, report.BarsWritten, 0, ct);
-            report.SnapshotId = snapshot.Id;
+            report.SnapshotsSealed = await snapshots.SealHistoricalSnapshotsAsync(
+                from, to, "nse-bhavcopy-archive/1", ct);
         }
 
         report.Elapsed = sw.Elapsed;
@@ -291,6 +295,6 @@ public sealed class BackfillReport
     public int IsinsMapped { get; set; }
     public int SyntheticIds { get; set; }
     public int DelistedDetected { get; set; }
-    public int? SnapshotId { get; set; }
+    public int SnapshotsSealed { get; set; }
     public TimeSpan Elapsed { get; set; }
 }
